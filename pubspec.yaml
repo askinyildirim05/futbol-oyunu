@@ -1,0 +1,26 @@
+name: futbol_kariyer
+description: Cocuklar icin futbol kariyer oyunu
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  shared_preferences: ^2.2.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_launcher_icons: ^0.13.1
+
+flutter_launcher_icons:
+  android: true
+  image_path: "icon.png"
+  adaptive_icon_background: "#2E7D32"
+  adaptive_icon_foreground: "icon.png"
+
+flutter:
+  uses-material-design: true

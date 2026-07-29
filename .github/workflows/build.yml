@@ -1,0 +1,30 @@
+name: APK Uret
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.35.2'
+          channel: stable
+          cache: true
+      - name: Android platform dosyalarini uret
+        run: flutter create --platforms android --org com.futbolkariyer .
+      - name: Gradle 8e sabitle ve minSdk ayarla
+        run: |
+          sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.14.3-all.zip|' android/gradle/wrapper/gradle-wrapper.properties
+          sed -i 's|flutter.minSdkVersion|23|' android/app/build.gradle.kts 2>/dev/null || true
+      - name: Uygulama adini manifeste gom
+        run: sed -i 's|android:label="futbol_kariyer"|android:label="Futbol Kariyer"|' android/app/src/main/AndroidManifest.xml
+      - run: flutter pub get
+      - run: dart run flutter_launcher_icons
+      - run: flutter build apk --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FutbolKariyer-APK
+          path: build/app/outputs/flutter-apk/app-release.apk

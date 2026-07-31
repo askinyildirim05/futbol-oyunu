@@ -21,6 +21,10 @@ jobs:
           sed -i 's|flutter.minSdkVersion|23|' android/app/build.gradle.kts 2>/dev/null || true
       - name: Uygulama adini manifeste gom
         run: sed -i 's|android:label="futbol_kariyer"|android:label="Futbol Kariyer"|' android/app/src/main/AndroidManifest.xml
+      - name: AdMob meta-data manifeste ekle
+        run: |
+          sed -i 's|apk/res/android">|apk/res/android">\n    <uses-permission android:name="android.permission.INTERNET"/>|' android/app/src/main/AndroidManifest.xml
+          sed -i 's|<application|<application\n        <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-5113050441647801~5970291753"/>|' android/app/src/main/AndroidManifest.xml
       - run: flutter pub get
       - run: dart run flutter_launcher_icons
       - run: flutter build apk --release

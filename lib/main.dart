@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -699,6 +700,71 @@ Widget altEkran({required String baslik, required Widget child, Color? arkaplan}
   );
 }
 
+// ---------- Gercek resim varliklari (assets/) ----------
+// Yuklenemeyen resim null kalir: o durumda mevcut kod-cizim fallback devreye girer.
+class Resimler {
+  static ui.Image? saha; // saha_zemin.jpg
+  static ui.Image? splash; // splash_stadyum.jpg
+  static ui.Image? top; // top.png
+  static ui.Image? kaleci; // kaleci.png
+  static ui.Image? kirmizi1; // oyuncu_kirmizi_1.png
+  static ui.Image? kirmizi2; // oyuncu_kirmizi_2.png
+  static ui.Image? mavi1; // oyuncu_mavi_1.png
+  static ui.Image? mavi2; // oyuncu_mavi_2.png
+  static bool _basladi = false;
+
+  static Future<ui.Image?> _tek(String yol) async {
+    try {
+      final ByteData veri = await rootBundle.load(yol);
+      final ui.Codec codec = await ui.instantiateImageCodec(veri.buffer.asUint8List());
+      final ui.FrameInfo kare = await codec.getNextFrame();
+      return kare.image;
+    } catch (_) {
+      return null; // fallback: kod-cizim
+    }
+  }
+
+  static Future<void> yukle() {
+    if (_basladi) return Future<void>.value();
+    _basladi = true;
+    return Future.wait(<Future<void>>[
+      _tek('assets/saha_zemin.jpg').then((ui.Image? i) => saha = i),
+      _tek('assets/splash_stadyum.jpg').then((ui.Image? i) => splash = i),
+      _tek('assets/top.png').then((ui.Image? i) => top = i),
+      _tek('assets/kaleci.png').then((ui.Image? i) => kaleci = i),
+      _tek('assets/oyuncu_kirmizi_1.png').then((ui.Image? i) => kirmizi1 = i),
+      _tek('assets/oyuncu_kirmizi_2.png').then((ui.Image? i) => kirmizi2 = i),
+      _tek('assets/oyuncu_mavi_1.png').then((ui.Image? i) => mavi1 = i),
+      _tek('assets/oyuncu_mavi_2.png').then((ui.Image? i) => mavi2 = i),
+    ]);
+  }
+}
+
+// BoxFit.cover mantigi: dst oranina gore kaynak dikdortgeni kirpilir.
+// yBas/ySon: kaynak dikey araligi sinirlar (or. cim bolgesine agirlik vermek icin),
+// alt kenara sabitlenir (cim altta kalsin).
+Rect coverKaynak(ui.Image img, Rect dst, {double yBas = 0.0, double ySon = 1.0}) {
+  final double iw = img.width.toDouble();
+  final double ih = img.height.toDouble();
+  final double ry0 = (ih * yBas).clamp(0.0, ih - 1);
+  final double ry1 = (ih * ySon).clamp(ry0 + 1, ih);
+  final double rh = ry1 - ry0;
+  final double hedefOran = dst.width / dst.height;
+  double sw = iw;
+  double sh = rh;
+  if (iw / rh > hedefOran) {
+    sw = rh * hedefOran; // yataydan kirp
+  } else {
+    sh = iw / hedefOran; // dikeyden kirp
+    if (sh > rh) sh = rh;
+  }
+  final double x0 = (iw - sw) / 2;
+  double yy0 = ry1 - sh;
+  if (yy0 < ry0) yy0 = ry0;
+  if (yy0 + sh > ry1) sh = ry1 - yy0;
+  return Rect.fromLTRB(x0, yy0, x0 + sw, yy0 + sh);
+}
+
 // ---------- CEA GAMES açılış imza ekranı ----------
 
 class CeaSplashEkrani extends StatefulWidget {
@@ -721,6 +787,10 @@ class _CeaSplashEkraniState extends State<CeaSplashEkrani> with SingleTickerProv
       if (s == AnimationStatus.completed) bitis();
     });
     kontrol.forward();
+    // Gercek resim varliklari: async yukle, yuklenince yeniden ciz
+    Resimler.yukle().then((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   void bitis() {
@@ -753,7 +823,7 @@ class _CeaSplashEkraniState extends State<CeaSplashEkrani> with SingleTickerProv
                   offset: Offset(0, -cons.maxHeight * kayma),
                   child: Opacity(
                     opacity: 1.0 - kayma * 0.4,
-                    child: SizedBox.expand(child: CustomPaint(painter: SplashPainter(t))),
+                    child: SizedBox.expand(child: CustomPaint(painter: SplashPainter(t, Resimler.splash))),
                   ),
                 );
               },
@@ -769,7 +839,8 @@ class _CeaSplashEkraniState extends State<CeaSplashEkrani> with SingleTickerProv
 // + harf harf elastik dusen metalik "CEA GAMES" logosu
 class SplashPainter extends CustomPainter {
   final double t;
-  SplashPainter(this.t);
+  final ui.Image? zemin; // splash_stadyum.jpg (null ise kod-cizim fallback)
+  SplashPainter(this.t, [this.zemin]);
 
   static const String logo = 'CEA GAMES';
 
@@ -820,29 +891,38 @@ class SplashPainter extends CustomPainter {
     final double h = size.height;
     final double ufuk = h * 0.72; // cim ufuk cizgisi
 
-    // --- Gece gokyuzu: ustte koyu lacivert, ufukta hafif aydinlik ---
-    canvas.drawRect(
-      Rect.fromLTWH(0, 0, w, h),
-      Paint()
-        ..shader = const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: <Color>[Color(0xFF02060F), Color(0xFF071224), Color(0xFF0B1E33)],
-          stops: <double>[0.0, 0.55, 0.72],
-        ).createShader(Rect.fromLTWH(0, 0, w, h)),
-    );
-    // --- Cim zemini: ufuk cizgisinden asagiya yesil gradyan ---
-    canvas.drawRect(
-      Rect.fromLTWH(0, ufuk, w, h - ufuk),
-      Paint()
-        ..shader = const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: <Color>[Color(0xFF1B5E20), Color(0xFF2E7D32), Color(0xFF14380F)],
-        ).createShader(Rect.fromLTWH(0, ufuk, w, h - ufuk)),
-    );
-    // Ufuk isik hatti
-    canvas.drawRect(Rect.fromLTWH(0, ufuk - 1, w, 2), Paint()..color = const Color(0xFF66BB6A).withOpacity(0.5));
+    if (zemin != null) {
+      // --- Gercek stadyum fotografi: tam ekran cover ---
+      final Rect tam = Rect.fromLTWH(0, 0, w, h);
+      canvas.drawRect(tam, Paint()..color = Colors.black);
+      canvas.drawImageRect(zemin!, coverKaynak(zemin!, tam), tam, Paint()..filterQuality = FilterQuality.medium);
+      // Harfler resmin ustunde okunabilsin diye hafif karartma
+      canvas.drawRect(tam, Paint()..color = Colors.black.withOpacity(0.22));
+    } else {
+      // --- Gece gokyuzu: ustte koyu lacivert, ufukta hafif aydinlik ---
+      canvas.drawRect(
+        Rect.fromLTWH(0, 0, w, h),
+        Paint()
+          ..shader = const LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: <Color>[Color(0xFF02060F), Color(0xFF071224), Color(0xFF0B1E33)],
+            stops: <double>[0.0, 0.55, 0.72],
+          ).createShader(Rect.fromLTWH(0, 0, w, h)),
+      );
+      // --- Cim zemini: ufuk cizgisinden asagiya yesil gradyan ---
+      canvas.drawRect(
+        Rect.fromLTWH(0, ufuk, w, h - ufuk),
+        Paint()
+          ..shader = const LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: <Color>[Color(0xFF1B5E20), Color(0xFF2E7D32), Color(0xFF14380F)],
+          ).createShader(Rect.fromLTWH(0, ufuk, w, h - ufuk)),
+      );
+      // Ufuk isik hatti
+      canvas.drawRect(Rect.fromLTWH(0, ufuk - 1, w, 2), Paint()..color = const Color(0xFF66BB6A).withOpacity(0.5));
+    }
 
     // --- 4 projektor huzmesi (hafif salinir, yarim seffaf beyaz-altin koniler) ---
     final double isik = (t / 0.18).clamp(0.0, 1.0);
@@ -4278,6 +4358,10 @@ class _MacEkraniState extends State<MacEkrani> {
     benimGez = List<Offset>.from(benimPos);
     rakipGez = List<Offset>.from(rakipPos);
     spikerEkle('Maç başladı! ${benimTakim.ad} v ${widget.rakip.ad}. Bol gollü bir maç olsun! 📣');
+    // Gercek resim varliklari: async yukle, yuklenince yeniden ciz (fallback: kod-cizim)
+    Resimler.yukle().then((_) {
+      if (mounted) setState(() {});
+    });
     timer = Timer.periodic(const Duration(milliseconds: 40), (Timer t) => tik());
   }
 
@@ -5789,6 +5873,34 @@ class ZeminPainter extends CustomPainter {
     final double ustY = h * SahaPainter.ust;
     final double altY = h * SahaPainter.alt;
 
+    // --- Gercek saha fotografi (varsa): cim agirlikli kaynak, ustte tribun biraz gorunur.
+    // Resmin cizgileri bizim perspektifle oturmadigindan saha cizgileri / kod tribunu /
+    // panolar cizilmez; kale direkleri + ince isik katmani korunur. ---
+    final ui.Image? zeminImg = Resimler.saha;
+    if (zeminImg != null) {
+      canvas.drawRect(Rect.fromLTWH(0, 0, w, h), Paint()..color = const Color(0xFF0A140D));
+      final Rect dst = Rect.fromLTWH(0, 0, w, h);
+      canvas.drawImageRect(zeminImg, coverKaynak(zeminImg, dst, yBas: 0.06), dst, Paint()..filterQuality = FilterQuality.medium);
+      // 2 buyuk yumusak projektor isigi elipsi (resmin uzerinde ince katman)
+      final Paint isikR = Paint()..color = const Color(0xFFFFF8E1).withOpacity(0.05);
+      canvas.drawOval(Rect.fromCenter(center: Offset(w * 0.30, h * (SahaPainter.ust + SahaPainter.alt) / 2), width: w * 0.55, height: (altY - ustY) * 0.7), isikR);
+      canvas.drawOval(Rect.fromCenter(center: Offset(w * 0.72, h * (SahaPainter.ust + SahaPainter.alt) / 2 + 10), width: w * 0.55, height: (altY - ustY) * 0.7), isikR);
+      // Kale direkleri (ag dokusu dinamik katmanda)
+      final Paint direkR = Paint()
+        ..color = Colors.white
+        ..strokeWidth = 3.5
+        ..strokeCap = StrokeCap.round;
+      for (final bool ust in <bool>[true, false]) {
+        final double sy = ust ? 0.0 : 1.0;
+        final Offset sd = SahaPainter.proje(Offset(0.38, sy), size);
+        final Offset sg = SahaPainter.proje(Offset(0.62, sy), size);
+        canvas.drawCircle(sd, 3, Paint()..color = Colors.white);
+        canvas.drawCircle(sg, 3, Paint()..color = Colors.white);
+        canvas.drawLine(sd, sg, direkR);
+      }
+      return;
+    }
+
     // --- Stadyum zemini (saha disi koyu) ---
     canvas.drawRect(Rect.fromLTWH(0, 0, w, h), Paint()..color = const Color(0xFF14261A));
 
@@ -5913,6 +6025,7 @@ class SahaPainter extends CustomPainter {
   // hata #11: static YOK — kosma fazlari painter instance alaninda
   final Map<String, Offset> _sonPos = <String, Offset>{};
   final Map<String, double> _kosFaz = <String, double>{};
+  final Map<String, double> _yon = <String, double>{}; // sprite yatay flip yonu (1=sol, -1=sag)
   // TextPainter cache (isim/forma no tekrar layout edilmez)
   final Map<String, TextPainter> _tpCache = <String, TextPainter>{};
 
@@ -6068,22 +6181,38 @@ class SahaPainter extends CustomPainter {
     );
     final Offset tpc = zemin - Offset(0, z * 60);
     final double tr = 6.5 + z * 4.0;
-    canvas.drawCircle(tpc, tr, Paint()..color = Colors.white);
-    canvas.drawCircle(
-        tpc,
-        tr,
-        Paint()
-          ..color = Colors.black54
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.4);
-    // 3 dikis yayi spin ile doner
-    final Paint dikis = Paint()
-      ..color = Colors.black87
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.3;
-    for (int k = 0; k < 3; k++) {
-      final double aci = s.topSpin + k * 2 * pi / 3;
-      canvas.drawArc(Rect.fromCircle(center: tpc, radius: tr * 0.55), aci, 1.2, false, dikis);
+    if (Resimler.top != null) {
+      // Gercek top: ucus sirasinda hafif dondur (spin = mesafe birikimli)
+      canvas.save();
+      canvas.translate(tpc.dx, tpc.dy);
+      canvas.rotate(s.topSpin);
+      final ui.Image topImg = Resimler.top!;
+      final double tb = tr * 2.15;
+      canvas.drawImageRect(
+        topImg,
+        Rect.fromLTWH(0, 0, topImg.width.toDouble(), topImg.height.toDouble()),
+        Rect.fromCenter(center: Offset.zero, width: tb, height: tb),
+        Paint()..filterQuality = FilterQuality.low,
+      );
+      canvas.restore();
+    } else {
+      canvas.drawCircle(tpc, tr, Paint()..color = Colors.white);
+      canvas.drawCircle(
+          tpc,
+          tr,
+          Paint()
+            ..color = Colors.black54
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.4);
+      // 3 dikis yayi spin ile doner
+      final Paint dikis = Paint()
+        ..color = Colors.black87
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.3;
+      for (int k = 0; k < 3; k++) {
+        final double aci = s.topSpin + k * 2 * pi / 3;
+        canvas.drawArc(Rect.fromCircle(center: tpc, radius: tr * 0.55), aci, 1.2, false, dikis);
+      }
     }
 
     // --- Gol ani: top agda (esneyen agin icinde) ---
@@ -6093,14 +6222,24 @@ class SahaPainter extends CustomPainter {
         final Offset merkez = proje(Offset(0.5, ustKale ? 0.0 : 1.0), size);
         final Offset titresim = Offset(sin(ag * 40) * 3 * ag, cos(ag * 33) * 2 * ag);
         final Offset gm = merkez + Offset(0, ustKale ? -8 : 8) + titresim;
-        canvas.drawCircle(gm, 7, Paint()..color = Colors.white);
-        canvas.drawCircle(
-            gm,
-            7,
-            Paint()
-              ..color = Colors.black54
-              ..style = PaintingStyle.stroke
-              ..strokeWidth = 1.4);
+        if (Resimler.top != null) {
+          final ui.Image topImg = Resimler.top!;
+          canvas.drawImageRect(
+            topImg,
+            Rect.fromLTWH(0, 0, topImg.width.toDouble(), topImg.height.toDouble()),
+            Rect.fromCircle(center: gm, radius: 7.5),
+            Paint()..filterQuality = FilterQuality.low,
+          );
+        } else {
+          canvas.drawCircle(gm, 7, Paint()..color = Colors.white);
+          canvas.drawCircle(
+              gm,
+              7,
+              Paint()
+                ..color = Colors.black54
+                ..style = PaintingStyle.stroke
+                ..strokeWidth = 1.4);
+        }
       }
     }
 
@@ -6244,6 +6383,16 @@ class SahaPainter extends CustomPainter {
     if (ben || topOnda) {
       canvas.drawCircle(g - Offset(0, boyH * 0.5), boyH * 0.46, Paint()..color = (ben ? kAltin : Colors.white).withOpacity(0.16));
     }
+    // Kullanici oyuncu: ayak altinda altin halka
+    if (ben) {
+      canvas.drawOval(
+        Rect.fromCenter(center: g0 + const Offset(0, 2), width: boyH * 0.62, height: boyH * 0.18),
+        Paint()
+          ..color = kAltin.withOpacity(0.9)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2,
+      );
+    }
 
     // Sut after-image: 3 hayalet siluet (alfa 0.25 / 0.15 / 0.08)
     if (sutK >= 0) {
@@ -6267,6 +6416,40 @@ class SahaPainter extends CustomPainter {
       // Kosmada govde 6° one egik (hucum yonu: biz yukari, rakip asagi)
       final double yon = takim == 0 ? -1.0 : 1.0;
       canvas.rotate(0.105 * kosK * yon);
+    }
+
+    // --- Gercek sprite (varsa): takim1=kirmizi, takim2=mavi, kaleci=kaleci.png.
+    // Sprite'lar SOLA kosar; saga hareket ediyorsa yatay flip. Kosarken 1/2 pozlari
+    // ~150 ms'de degisir + hafif dikey ziplama; durunca poz1 sabit. ---
+    final bool kosuyor = kosK > 0.08;
+    final ui.Image? spr = kaleci
+        ? Resimler.kaleci
+        : (kosuyor && (s.animT / 0.15).floor().isOdd
+            ? (takim == 0 ? Resimler.kirmizi2 : Resimler.mavi2)
+            : (takim == 0 ? Resimler.kirmizi1 : Resimler.mavi1));
+    if (spr != null) {
+      final double hareketDx = g0.dx - once.dx;
+      if (hareketDx > 0.15) {
+        _yon[anahtar] = -1; // saga kosuyor -> flip
+      } else if (hareketDx < -0.15) {
+        _yon[anahtar] = 1;
+      }
+      if ((_yon[anahtar] ?? 1) < 0) canvas.scale(-1, 1);
+      final double sh2 = boyH * 1.06;
+      final double sw2 = sh2 * spr.width / spr.height;
+      final double zipY = kosuyor ? 2.5 * (0.5 + 0.5 * sin(faz * 2)) : 0.0;
+      canvas.drawImageRect(
+        spr,
+        Rect.fromLTWH(0, 0, spr.width.toDouble(), spr.height.toDouble()),
+        Rect.fromLTWH(-sw2 / 2, -sh2 - zipY, sw2, sh2),
+        Paint()..filterQuality = FilterQuality.low,
+      );
+      canvas.restore();
+      // Isim etiketi (kullanici / top sahibi / pas hedefi)
+      if (ben || topOnda || vurgu) {
+        yazi(canvas, isim, g + Offset(0, boyH * 0.14), 8, Colors.white);
+      }
+      return;
     }
 
     final double bacak = boyH * 0.40;

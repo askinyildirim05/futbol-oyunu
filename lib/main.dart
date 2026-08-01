@@ -273,6 +273,19 @@ class _AnaCerceveState extends State<AnaCerceve> {
         final Map<String, dynamic> k = Map<String, dynamic>.from(jsonDecode(c) as Map<dynamic, dynamic>);
         // Eski/uyumsuz kayıt kontrolü: v2 şeması yoksa temiz başlat
         if (k['v'] == 2 && k['ozellikler'] is Map && k['fikstur'] is List) {
+          // Takım arkadaşları eksik/bozuksa 10 kişiye tamamla (yeniKariyerOlustur mantığı)
+          final List<dynamic> mevcutArkadaslar = (k['arkadaslar'] is List) ? List<dynamic>.from(k['arkadaslar'] as List) : <dynamic>[];
+          if (mevcutArkadaslar.length < 10) {
+            final Random rr = Random();
+            final String ulke = (k['ulke'] ?? 'Türkiye') as String;
+            final List<String> isimler = List<String>.from(kOyuncuIsimleri[ulke] ?? kOyuncuIsimleri['Türkiye']!);
+            isimler.shuffle(rr);
+            for (final String isim in isimler) {
+              if (mevcutArkadaslar.length >= 10) break;
+              if (!mevcutArkadaslar.contains(isim)) mevcutArkadaslar.add(isim);
+            }
+            k['arkadaslar'] = mevcutArkadaslar;
+          }
           kariyer = k;
         }
       }
@@ -282,7 +295,11 @@ class _AnaCerceveState extends State<AnaCerceve> {
     try {
       final String? s = prefs!.getString('settings');
       if (s != null) {
-        ayarlar = Map<String, dynamic>.from(jsonDecode(s) as Map<dynamic, dynamic>);
+        final Map<String, dynamic> a = Map<String, dynamic>.from(jsonDecode(s) as Map<dynamic, dynamic>);
+        // Şema doğrulaması: bozuksa varsayılan ayarlar korunur
+        if (a['zorluk'] is String && a['ses'] is num) {
+          ayarlar = a;
+        }
       }
     } catch (_) {}
     if (mounted) setState(() {});
@@ -397,7 +414,8 @@ class _AnaCerceveState extends State<AnaCerceve> {
 Map<String, dynamic> yeniKariyerOlustur(String ad, String soyad, String ulke, String takim) {
   final Random r = Random();
   final List<TakimBilgi> lig = ligTakimlari(ulke);
-  final int benimIndex = lig.indexWhere((TakimBilgi t) => t.ad == takim);
+  int benimIndex = lig.indexWhere((TakimBilgi t) => t.ad == takim);
+  if (benimIndex < 0) benimIndex = 0; // Takım bulunamazsa güvenli varsayılan
   // 34 haftalık fikstür (her takımla 2 kez)
   final List<int> rakipler = <int>[for (int i = 0; i < lig.length; i++) if (i != benimIndex) i];
   rakipler.shuffle(r);
@@ -540,7 +558,7 @@ double ortalamaRating(Map<String, dynamic> k) {
   if (g.isEmpty) return 6.0;
   double t = 0;
   for (final dynamic e in g) {
-    t += (e as num).toDouble();
+    t += e is num ? (e as num).toDouble() : 6.0;
   }
   return t / g.length;
 }
@@ -1056,8 +1074,10 @@ class _YukleniyorEkraniState extends State<YukleniyorEkrani> with SingleTickerPr
     kontrol = AnimationController(vsync: this, duration: const Duration(milliseconds: 3000));
     kontrol.addStatusListener((AnimationStatus s) async {
       if (s == AnimationStatus.completed) {
+        if (!mounted) return;
         setState(() => zipliyor = true);
         await Future<void>.delayed(const Duration(milliseconds: 600));
+        if (!mounted) return;
         widget.bitir();
       }
     });
@@ -1822,8 +1842,10 @@ class _KariyerEkraniState extends State<KariyerEkrani> {
     final List<dynamic> fik = kListe(k, 'fikstur');
     final int hafta = kInt(k, 'hafta', 1);
     if (fik.isEmpty || hafta < 1 || hafta > fik.length) return lig[0];
-    final int idx = ((fik[hafta - 1] as num).toInt()).clamp(0, lig.length - 1);
-    if (lig[idx].ad == benimTakim.ad && lig.length > 1) return lig[(idx + 1) % lig.length];
+    // Fikstür kaydını güvenli oku
+    final dynamic kayit = fik[hafta - 1];
+    if (kayit is! num) return lig[0];
+    final int idx = kayit.toInt().clamp(0, lig.length - 1);
     return lig[idx];
   }
 
@@ -1970,6 +1992,7 @@ class _KariyerEkraniState extends State<KariyerEkrani> {
     final List<TakimBilgi> lig = ligTakimlari(kStr(k, 'ulke'));
     final int benimIdx = benimTakim.index;
     final int rakipIdx = rakipTakim().index;
+    if (benimIdx == rakipIdx) return; // Rakip kendi takımıysa tabloyu güncelleme
     final List<dynamic> tablo = kListe(k, 'tablo');
     void satir(int i, int ag, int yg) {
       if (i < 0 || i >= tablo.length) return;
@@ -2290,7 +2313,8 @@ class _BildirimlerEkraniState extends State<BildirimlerEkrani> {
               padding: const EdgeInsets.all(12),
               itemCount: b.length,
               itemBuilder: (BuildContext context, int i) {
-                final Map<String, dynamic> m = Map<String, dynamic>.from(b[i] as Map<dynamic, dynamic>);
+                final dynamic oge = b[i]; // Öğe referansı: index kaymasına karşı
+                final Map<String, dynamic> m = Map<String, dynamic>.from(oge as Map<dynamic, dynamic>);
                 final bool antrenman = m['tip'] == 'antrenman';
                 return Card(
                   color: antrenman ? const Color(0xFFFFF9C4) : Colors.white,
@@ -2314,7 +2338,7 @@ class _BildirimlerEkraniState extends State<BildirimlerEkrani> {
                                     if (kInt(widget.kariyer, 'antHafta', 0) == kInt(widget.kariyer, 'hafta', 1)) return;
                                     widget.kariyer['antPuani'] = kInt(widget.kariyer, 'antPuani') + 1;
                                     widget.kariyer['antHafta'] = kInt(widget.kariyer, 'hafta', 1);
-                                    b.removeAt(i);
+                                    b.remove(oge);
                                     setState(() {});
                                   },
                                 ),
@@ -3348,8 +3372,17 @@ class _KramponlarEkraniState extends State<KramponlarEkrani> with SingleTickerPr
       adUnitId: kRewardedReklamId,
       request: const AdRequest(),
       rewardedAdLoadCallback: RewardedAdLoadCallback(
-        onAdLoaded: (RewardedAd ad) => odulluReklam = ad,
-        onAdFailedToLoad: (LoadAdError e) => odulluReklam = null,
+        onAdLoaded: (RewardedAd ad) {
+          if (!mounted) {
+            ad.dispose();
+            return;
+          }
+          odulluReklam = ad;
+        },
+        onAdFailedToLoad: (LoadAdError e) {
+          if (!mounted) return;
+          odulluReklam = null;
+        },
       ),
     );
   }
@@ -3411,14 +3444,19 @@ class _KramponlarEkraniState extends State<KramponlarEkrani> with SingleTickerPr
       carkDonuyor = true;
       carkSonuc = '';
     });
-    final double hedefTur = 5 * 2 * pi + (kazanan / kKramponMagaza.length) * 2 * pi;
+    // Gösterge üstte (-pi/2). CarkPainter'da dilim i'nin merkezi: (i/n)*2π - π/2 + π/n + açı.
+    // Kazanan dilimin merkezi göstergeye denk gelsin: açı ≡ -kazanan*dilim - dilim/2 (mod 2π)
+    final double dilimBoyu = 2 * pi / kKramponMagaza.length;
     final double baslangic = carkAcisi % (2 * pi);
+    final double hedefAci = (-kazanan * dilimBoyu - dilimBoyu / 2) % (2 * pi);
+    final double kalan = (hedefAci - baslangic) % (2 * pi);
     carkKontrol.reset();
-    final Animation<double> anim = Tween<double>(begin: baslangic, end: baslangic + hedefTur).animate(CurvedAnimation(parent: carkKontrol, curve: Curves.decelerate));
+    final Animation<double> anim = Tween<double>(begin: baslangic, end: baslangic + 5 * 2 * pi + kalan).animate(CurvedAnimation(parent: carkKontrol, curve: Curves.decelerate));
     anim.addListener(() {
       carkAcisi = anim.value;
     });
     carkKontrol.forward().then((_) {
+      if (!mounted) return;
       setState(() {
         carkDonuyor = false;
         final List<dynamic> env = kListe(widget.kariyer, 'kramponlar');
@@ -3445,16 +3483,19 @@ class _KramponlarEkraniState extends State<KramponlarEkrani> with SingleTickerPr
     ad.fullScreenContentCallback = FullScreenContentCallback(
       onAdDismissedFullScreenContent: (RewardedAd a) {
         a.dispose();
+        if (!mounted) return;
         odulluReklam = null;
         reklamiYukle();
       },
       onAdFailedToShowFullScreenContent: (RewardedAd a, AdError e) {
         a.dispose();
+        if (!mounted) return;
         odulluReklam = null;
         reklamiYukle();
       },
     );
     ad.show(onUserEarnedReward: (AdWithoutView a, RewardItem r) {
+      if (!mounted) return;
       carkCevir();
     });
   }
@@ -3926,10 +3967,11 @@ class MacGunuEkrani extends StatelessWidget {
     final List<String> rakipIsimler = rakipOyunculari(rakip);
     final int benimNo = kInt(kariyer, 'formaNo', 99);
     final Random rr = Random(rakip.ad.length * 31 + kInt(kariyer, 'hafta', 1));
-    final List<int> rakipNolar = <int>{...<int>[for (int i = 0; i < 11; i++) 1 + rr.nextInt(40)]}.take(11).toList();
-    while (rakipNolar.length < 11) {
-      rakipNolar.add(1 + rr.nextInt(50));
+    final Set<int> rakipNoSet = <int>{...<int>[for (int i = 0; i < 11; i++) 1 + rr.nextInt(40)]};
+    while (rakipNoSet.length < 11) {
+      rakipNoSet.add(1 + rr.nextInt(50));
     }
+    final List<int> rakipNolar = rakipNoSet.toList();
     return Scaffold(
       backgroundColor: const Color(0xFFE8F5E9),
       body: SafeArea(
@@ -4067,11 +4109,29 @@ class Konfeti {
   Konfeti(this.p, this.v, this.c, this.omur, this.boyut);
 }
 
+// Kaleci dalisi toz parcacigi
+class Toz {
+  Offset p;
+  Offset v;
+  double omur;
+  Toz(this.p, this.v, this.omur);
+}
+
+// Mikro sonuc karti (floating text)
+class MikroKart {
+  final String yazi;
+  final Color renk;
+  final bool buyuk;
+  double t; // 0 -> 1 yasam
+  MikroKart(this.yazi, this.renk, {this.buyuk = false}) : t = 0;
+}
+
 class _MacEkraniState extends State<MacEkrani> {
   final Random r = Random();
   Timer? timer;
   Timer? overlayTimer;
   Timer? secimTimer;
+  Timer? sonucTimer; // hata #10: mac sonu timer'i alanda tutulur, dispose'da iptal
   double dakika = 0;
   int hiz = 1;
   int skorBiz = 0;
@@ -4081,10 +4141,14 @@ class _MacEkraniState extends State<MacEkrani> {
   int pas = 0;
   int sut = 0;
   final List<String> spiker = <String>[];
+  double spikerT = 99; // yazi makinesi efekti: son satirin yasi (sn)
+  final Map<int, int> sablonSayi = <int, int>{}; // ayni sablon mac basina max 2 kez
   String fase = 'oyun'; // oyun, devre, sonuc, panel, roportaj
   String overlay = '';
   Color overlayRenk = kAltin;
   bool devreYapildi = false;
+  double devreT = 0; // devre karti sayac animasyonu
+  double panelT = 0; // mac sonu karti flip animasyonu
   String roportajSoru = '';
   List<List<String>> roportajCevaplar = <List<String>>[];
   String roportajEtki = '';
@@ -4114,22 +4178,33 @@ class _MacEkraniState extends State<MacEkrani> {
   Offset ucusBit = const Offset(0.5, 0.42);
   VoidCallback? ucusSonu;
   double topYukseklik = 0; // 0..1 (yerden yukseklik hissi)
+  double topSpin = 0; // top dikis yaylarinin donusu
+  double sonGuc = 0.55; // son vurus gucu (trail rengi icin)
 
-  // --- Gol efektleri ---
+  // --- Gol efektleri / sinematigi ---
   double sarsinti = 0; // 1 -> 0 azalan ekran sarsintisi
   final List<Konfeti> konfeti = <Konfeti>[];
-  final List<Offset> topIz = <Offset>[]; // top ucus izi (trail)
-  double animT = 0; // kosma sallanma animasyonu icin zaman
-  double agUst = 0; // ust kale aginda titresim suresi
-  double agAlt = 0; // alt kale aginda titresim suresi
+  final List<Toz> toz = <Toz>[];
+  final List<Offset> topIz = <Offset>[]; // top ucus izi (trail, ring buffer 8)
+  double animT = 0; // gorsel zaman (slow-mo'da yavaslar)
+  double agUst = 0; // ust kale aginda esneme suresi
+  double agAlt = 0; // alt kale aginda esneme suresi
   String mesafeYazi = ''; // vurus mesafesi kutusu
   double overlayBoyut = 44;
   String overlayAlt = ''; // gol atanin adi (GOOOL alt yazisi)
   double overlayT = 1; // overlay giris animasyonu 0..1
+  double golSineT = 0; // gol sinematigi kalan sure (2.2 -> 0)
+  double tribunZipla = 0; // golde tribun ziplama dalgasi
+  double skorFlash = 0; // golde skorboard flas
   // Kaleci kurtaris dalisi
   double dalisT = 0; // kalan sure (0.8 -> 0)
   int dalisTakim = -1; // 0 = bizim kaleci, 1 = rakip kaleci
   double dalisYon = 1; // -1 sol, +1 sag
+  // Sut savurma + sevinc animasyonlari
+  double sutT = 0; // 0.3 -> 0 bacak savurma
+  String sutAnahtar = '';
+  double sevincT = 0; // 1.2 -> 0 kollar V + ziplama
+  String sevincAnahtar = '';
 
   // --- Interaktif pozisyon ---
   bool interaktif = false;
@@ -4141,6 +4216,18 @@ class _MacEkraniState extends State<MacEkrani> {
   int hedefIndex = -1;
   String hedefKose = 'sol';
   Size sahaSize = const Size(100, 100);
+  double interaktifT = 0; // kaleci kayma animasyonu zamani
+
+  // --- Game-feel: mikro kartlar, tehlike, combo, gorevler, hiz ---
+  final List<MikroKart> kartlar = <MikroKart>[];
+  bool sonrakiInteraktif = false; // siradaki pozisyon interaktif mi (onceden belli)
+  bool tehlikeGosterildi = false;
+  bool ekstraPozisyonVerildi = false; // 88'+ garanti interaktif
+  int combo = 0; // ust uste basarili aksiyon (FORMDAYIM)
+  final List<int> gorevIlerleme = <int>[0, 0, 0]; // ilk sut, 2 isabetli pas, combo x3
+  final List<bool> gorevBitti = <bool>[false, false, false];
+  double hizEtiketT = 0; // hiz degisimi etiketi (1 sn)
+  String hizEtiket = '';
 
   // Dizilis konumlari (4-4-2): x, y oranlari
   static const List<List<double>> kDizilis = <List<double>>[
@@ -4155,6 +4242,30 @@ class _MacEkraniState extends State<MacEkrani> {
     Color(0xFFFF5252), Color(0xFFFFD740), Color(0xFF69F0AE), Color(0xFF40C4FF),
     Color(0xFFE040FB), Color(0xFFFF9800), Color(0xFFFFFFFF), Color(0xFF76FF03),
   ];
+
+  // Spiker sablonlari (15 adet, {OYUNCU} degiskenli)
+  static const List<String> kSablonlar = <String>[
+    'Büyük fırsat! {OYUNCU} topu kaptı!',
+    'Kaleci müthiş çıkardı! 🧤',
+    'Top direkten döndü! 😱',
+    'GOOOL! {OYUNCU} sahneye çıkıyor! ⚽',
+    'Tribünler ayakta! 📣',
+    'Son dakikalar! Her dokunuş altın değerinde.',
+    'Teknik direktör kenarda çıldırıyor!',
+    'Savunma duvar gibi, geçit yok.',
+    'Uzatma dakikaları... kalpler ağızda!',
+    'Orta sahada büyük mücadele var!',
+    'Taraftarlar coşkuyla takımını destekliyor! 🎺',
+    '{OYUNCU} boş koşu yapıyor, topu istiyor!',
+    'Tempo giderek artıyor! ⚡',
+    '{OYUNCU} pres yapıyor, rakip zorlanıyor.',
+    'Maç formaliteye döndü, tribünler şov yapıyor. 🎆',
+  ];
+
+  // Painter'lar state'i referans alir; boylece instance alanlari (kosma fazi,
+  // TextPainter cache) her frame sifirlanmaz (hata #11).
+  late final ZeminPainter zeminPainter = ZeminPainter(this);
+  late final SahaPainter sahaPainter = SahaPainter(this);
 
   @override
   void initState() {
@@ -4175,13 +4286,50 @@ class _MacEkraniState extends State<MacEkrani> {
     timer?.cancel();
     overlayTimer?.cancel();
     secimTimer?.cancel();
+    sonucTimer?.cancel();
     super.dispose();
   }
 
   void spikerEkle(String s) {
     spiker.add(s);
+    spikerT = 0; // yazi makinesi yeniden baslar
     while (spiker.length > 5) {
       spiker.removeAt(0);
+    }
+  }
+
+  // Sablonlu yorum: ayni sablon mac basina max 2 kez
+  void sablonSoyle(int i, {String oyuncu = ''}) {
+    final int kullanim = sablonSayi[i] ?? 0;
+    if (kullanim >= 2) return;
+    sablonSayi[i] = kullanim + 1;
+    spikerEkle(kSablonlar[i].replaceAll('{OYUNCU}', oyuncu));
+  }
+
+  void mikroKartEkle(String yazi, Color renk, {bool buyuk = false}) {
+    kartlar.add(MikroKart(yazi, renk, buyuk: buyuk));
+    if (kartlar.length > 6) kartlar.removeAt(0);
+  }
+
+  void comboVur(bool basari) {
+    if (basari) {
+      combo++;
+    } else {
+      combo = 0;
+    }
+    gorevKontrol();
+  }
+
+  void gorevKontrol() {
+    gorevIlerleme[0] = sut.clamp(0, 1);
+    gorevIlerleme[1] = pas.clamp(0, 2);
+    gorevIlerleme[2] = combo.clamp(0, 3);
+    final List<int> hedefler = <int>[1, 2, 3];
+    for (int i = 0; i < 3; i++) {
+      if (!gorevBitti[i] && gorevIlerleme[i] >= hedefler[i]) {
+        gorevBitti[i] = true;
+        mikroKartEkle('+15', kYesil);
+      }
     }
   }
 
@@ -4196,60 +4344,135 @@ class _MacEkraniState extends State<MacEkrani> {
 
   void tik() {
     if (!mounted) return;
-    if (fase != 'oyun' || interaktif) {
-      // Sonuc/devre ekranlarinda da overlay giris animasyonu ilerlesin
+    // Interaktif modda kaleci sol-sag kayar (hiz zorluga gore), zaman ilerlemez
+    if (interaktif && fase == 'oyun') {
+      setState(() {
+        interaktifT += 0.04;
+        spikerT += 0.04;
+        final double kh = widget.zorluk == 'Kolay' ? 1.5 : (widget.zorluk == 'Zor' ? 3.2 : 2.3);
+        rakipPos[10] = Offset(0.5 + 0.085 * sin(interaktifT * kh), 0.045);
+        kartGuncelle(0.04);
+      });
+      return;
+    }
+    if (fase != 'oyun') {
+      // Sonuc/devre ekranlarinda da giris animasyonlari ilerlesin
       if (overlay.isNotEmpty && overlayT < 1) setState(() => overlayT = (overlayT + 0.13).clamp(0.0, 1.0));
+      if (fase == 'devre' && devreT < 2) setState(() => devreT += 0.04);
+      if (fase == 'panel' && panelT < 1) setState(() => panelT = (panelT + 0.05).clamp(0.0, 1.0));
       return;
     }
     setState(() {
       final double dt = 0.04 * hiz; // saniye (hiz carpani ile)
-      animT += dt;
+      // Gol sinematigi: ilk 400 ms gorsel zaman x0.25 (fizik state korunur)
+      final bool slowmo = golSineT > 1.8;
+      animT += dt * (slowmo ? 0.25 : 1.0);
+      spikerT += dt;
+      if (golSineT > 0) golSineT = (golSineT - dt).clamp(0.0, 2.2);
+      if (tribunZipla > 0) tribunZipla = (tribunZipla - dt / 1.4).clamp(0.0, 1.0);
+      if (skorFlash > 0) skorFlash = (skorFlash - dt * 1.4).clamp(0.0, 1.0);
+      if (hizEtiketT > 0) hizEtiketT = (hizEtiketT - dt).clamp(0.0, 1.0);
+      if (sutT > 0) sutT = (sutT - dt).clamp(0.0, 0.3);
+      if (sevincT > 0) sevincT = (sevincT - dt).clamp(0.0, 1.2);
       if (agUst > 0) agUst = (agUst - dt).clamp(0.0, 1.0);
       if (agAlt > 0) agAlt = (agAlt - dt).clamp(0.0, 1.0);
       if (dalisT > 0) {
+        final int dt2 = dalisTakim;
         dalisT = (dalisT - dt).clamp(0.0, 1.0);
-        if (dalisT <= 0) dalisTakim = -1;
+        if (dalisT <= 0 && dt2 >= 0) {
+          // Kaleci yere dustu: 2 toz parcacigi (butce: konfeti+toz <= 30)
+          final Offset kp = dt2 == 0 ? benimPos[10] : rakipPos[10];
+          final Offset ekran = SahaPainter.proje(kp, sahaSize);
+          toz.add(Toz(ekran + const Offset(-6, 4), const Offset(-22, -30), 0.5));
+          toz.add(Toz(ekran + const Offset(6, 4), const Offset(22, -30), 0.5));
+          parcButce();
+          dalisTakim = -1;
+        }
       }
       if (overlay.isNotEmpty && overlayT < 1) overlayT = (overlayT + dt * 3.2).clamp(0.0, 1.0);
+      kartGuncelle(dt);
+      tozGuncelle(dt);
       dakika += dt / 1.2; // 1x hizinda ~1.2 sn = 1 oyun dakikasi
+      // 88'+ ve fark <= 1 ise en az 1 ekstra interaktif pozisyon garanti
+      if (!ekstraPozisyonVerildi && dakika >= 88 && (skorBiz - skorRakip).abs() <= 1) {
+        ekstraPozisyonVerildi = true;
+        sonrakiInteraktif = true;
+        if (sonrakiPozisyonDk > dakika + 1.5) sonrakiPozisyonDk = dakika + 1.5;
+      }
+      // Tehlike uyarisi: interaktif pozisyondan ~1.5 sn (1.3 oyun dk) once
+      if (sonrakiInteraktif && !tehlikeGosterildi && !topUcuyor && sonrakiPozisyonDk - dakika <= 1.3) {
+        tehlikeGosterildi = true;
+        HapticFeedback.mediumImpact();
+        final bool sonSans = dakika >= 88 && (skorBiz - skorRakip).abs() <= 1;
+        mikroKartEkle(sonSans ? 'SON ŞANS!' : 'ATAK GELİYOR!', sonSans ? kAltin : const Color(0xFFFF7043), buyuk: true);
+      }
       if (!topUcuyor && dakika >= sonrakiPozisyonDk) pozisyonDusur();
       simule(dt);
       konfetiGuncelle(dt);
       if (sarsinti > 0) sarsinti = (sarsinti - dt * 1.1).clamp(0.0, 1.0);
-      // Rastgele spiker yorumu
+      // Rastgele spiker yorumu (sablon sistemi, max 2 tekrar)
       if (!topUcuyor && r.nextDouble() < 0.006 * dt * 25) {
-        final List<String> yorumlar = <String>[
-          'Orta sahada büyük mücadele var!',
-          'Taraftarlar coşkuyla takımını destekliyor! 🎺',
-          '${benimIsimler[0]} boş koşu yapıyor, topu istiyor!',
-          'Tempo giderek artıyor! ⚡',
-          '${rakipIsimler[r.nextInt(rakipIsimler.length)]} pres yapıyor.',
-        ];
-        spikerEkle(yorumlar[r.nextInt(yorumlar.length)]);
+        final bool formalite = (skorBiz - skorRakip).abs() >= 3;
+        final List<int> adaylar = formalite
+            ? <int>[14, 14, 4, 10]
+            : (dakika >= 85 ? <int>[5, 8, 4, 12] : <int>[4, 6, 7, 9, 10, 11, 12, 13]);
+        final String oy = r.nextBool()
+            ? benimIsimler[r.nextInt(benimIsimler.length)]
+            : rakipIsimler[r.nextInt(rakipIsimler.length)];
+        sablonSoyle(adaylar[r.nextInt(adaylar.length)], oyuncu: oy);
       }
       if (dakika >= 45 && !devreYapildi && !topUcuyor) {
         devreYapildi = true;
+        devreT = 0;
         fase = 'devre';
         spikerEkle('İlk yarı sona erdi! Devre arası. ⏸');
       }
-      if (dakika >= 90 && !topUcuyor) {
+      // hata #9: kullanici nisan alirken (interaktif) mac bitmesin
+      if (dakika >= 90 && !topUcuyor && !interaktif) {
         dakika = 90;
         macBitti();
       }
     });
   }
 
-  // Pozisyon eventleri: %40 kullaniciya interaktif, %60 yapay zeka (animasyonlu)
+  void kartGuncelle(double dt) {
+    for (final MikroKart k in kartlar) {
+      k.t += dt;
+    }
+    kartlar.removeWhere((MikroKart k) => k.t >= 1.0);
+  }
+
+  void parcButce() {
+    while (konfeti.length + toz.length > 30) {
+      if (konfeti.isNotEmpty) {
+        konfeti.removeAt(0);
+      } else {
+        toz.removeAt(0);
+      }
+    }
+  }
+
+  // Pozisyon eventleri: interaktif olup olmayacagi onceden belli (tehlike uyarisi icin)
   void pozisyonDusur() {
-    sonrakiPozisyonDk = dakika + 6 + r.nextDouble() * 8;
-    final double z = r.nextDouble();
-    if (z < 0.40) {
+    // Skora gore tempo: yenik takim 60'+ daha sik atak bulur, onde olan 80'+ yavaslar
+    double aralik = 6 + r.nextDouble() * 8;
+    if (skorBiz < skorRakip && dakika >= 60) aralik /= 1.8;
+    if (skorBiz > skorRakip && dakika >= 80) aralik *= 1.5;
+    sonrakiPozisyonDk = dakika + aralik;
+    tehlikeGosterildi = false;
+    if (sonrakiInteraktif) {
+      sonrakiInteraktif = false;
       interaktifBaslat();
-    } else if (z < 0.70) {
+      return;
+    }
+    final double z = r.nextDouble();
+    if (z < 0.5) {
       rakipAtak();
     } else {
       arkadasAtak();
     }
+    // Siradaki pozisyonun turu simdi belli olsun (uyari icin)
+    sonrakiInteraktif = r.nextDouble() < 0.40;
   }
 
   void simule(double dt) {
@@ -4309,9 +4532,10 @@ class _MacEkraniState extends State<MacEkrani> {
       final double t = ucusT.clamp(0.0, 1.0);
       top = Offset(aral(ucusBas.dx, ucusBit.dx, t), aral(ucusBas.dy, ucusBit.dy, t));
       topYukseklik = sin(pi * t) * ucusKavis;
-      // Beyaz-krem iz (trail): son 14 konum
+      topSpin += dt * 9; // dikis yaylari spin ile doner
+      // Trail ring-buffer: son 8 konum
       topIz.add(top);
-      if (topIz.length > 14) topIz.removeAt(0);
+      if (topIz.length > 8) topIz.removeAt(0);
       if (ucusT >= 1) {
         topUcuyor = false;
         top = ucusBit;
@@ -4324,6 +4548,7 @@ class _MacEkraniState extends State<MacEkrani> {
     } else {
       final List<Offset> pos = topTakim == 0 ? benimPos : rakipPos;
       top = pos[topOyuncu] + Offset(0, topTakim == 0 ? -0.015 : 0.015);
+      topSpin += dt * 1.5;
       pasSayac -= dt;
       if (pasSayac <= 0) {
         pasSayac = 0.9 + r.nextDouble() * 1.8;
@@ -4365,17 +4590,18 @@ class _MacEkraniState extends State<MacEkrani> {
   // ---- Gol efektleri ----
 
   void konfetiSac(Offset ekran) {
-    for (int i = 0; i < 26; i++) {
+    for (int i = 0; i < 24; i++) {
       final double aci = r.nextDouble() * 2 * pi;
       final double h = 70 + r.nextDouble() * 200;
       konfeti.add(Konfeti(
         ekran,
         Offset(cos(aci) * h, sin(aci) * h - 170),
         kKonfetiRenkler[r.nextInt(kKonfetiRenkler.length)],
-        1.0 + r.nextDouble() * 0.5,
+        1.2 + r.nextDouble() * 0.6, // ~1.8 sn donen konfeti
         4 + r.nextDouble() * 5,
       ));
     }
+    parcButce();
   }
 
   void konfetiGuncelle(double dt) {
@@ -4387,17 +4613,33 @@ class _MacEkraniState extends State<MacEkrani> {
     konfeti.removeWhere((Konfeti k) => k.omur <= 0);
   }
 
-  void golEfekt(bool ustKale, String yazi, Color renk, {String alt = ''}) {
+  void tozGuncelle(double dt) {
+    for (final Toz t in toz) {
+      t.p += t.v * dt;
+      t.v += const Offset(0, 160) * dt;
+      t.omur -= dt;
+    }
+    toz.removeWhere((Toz t) => t.omur <= 0);
+  }
+
+  void golEfekt(bool ustKale, String yazi, Color renk, {String alt = '', String? sevincKim}) {
     sarsinti = 1;
-    // Top kale ağına çarpar ve 0.4 sn titrer
+    golSineT = 2.2; // gol sinematigi (slow-mo + zoom + GOOOL + konfeti)
+    tribunZipla = 1;
+    skorFlash = 1;
+    // Top kale agina carpar ve 1 sn elastik sonumle esner
     if (ustKale) {
-      agUst = 0.4;
+      agUst = 1.0;
     } else {
-      agAlt = 0.4;
+      agAlt = 1.0;
+    }
+    if (sevincKim != null) {
+      sevincT = 1.2;
+      sevincAnahtar = sevincKim;
     }
     final Offset k = SahaPainter.proje(Offset(0.5, ustKale ? 0.0 : 1.0), sahaSize);
     konfetiSac(k);
-    goster(yazi, renk, boyut: yazi.contains('GOOOL') ? 72 : 44, alt: alt);
+    goster(yazi, renk, boyut: yazi.contains('GOOOL') ? 64 : 44, alt: alt);
   }
 
   // ---- Yapay zeka ataklari (once top ucusu, sonra sonuc) ----
@@ -4425,11 +4667,13 @@ class _MacEkraniState extends State<MacEkrani> {
       if (golOlur) {
         skorRakip++;
         spikerEkle('$oyuncu vurdu ve gol! ${widget.rakip.ad} skoru değiştiriyor. 😟');
+        comboVur(false);
         golEfekt(false, 'RAKİP GOL 😟', Colors.red.shade300);
       } else if ((hedef.dy - 0.985).abs() < 0.01) {
         dalisT = 0.8;
         dalisTakim = 0; // bizim kaleci dalıyor
         dalisYon = hedef.dx < 0.5 ? -1 : 1;
+        sablonSoyle(1);
         spikerEkle('$oyuncu şutunu çekti ama kaleci harika kurtardı! 🧤');
       } else {
         spikerEkle('$oyuncu topu auta gönderdi! Derin bir nefes aldık.');
@@ -4450,8 +4694,9 @@ class _MacEkraniState extends State<MacEkrani> {
     spikerEkle('$ark ceza sahası içinde boş durumda! Vuruyor... ⚡');
     topaUcus(Offset(0.40 + r.nextDouble() * 0.20, -0.01), sure: 0.85, kavis: 0.55, yavas: true, sonu: () {
       skorBiz++;
-      spikerEkle('$ark harika bir gol attı! ${benimTakim.ad} sevinç içinde! ⚽');
-      golEfekt(true, 'GOOOL!', kAltin, alt: 'HARİKA GOL! ⚽ $ark');
+      comboVur(true);
+      sablonSoyle(3, oyuncu: ark);
+      golEfekt(true, 'GOOOL!', kAltin, alt: 'HARİKA GOL! ⚽ $ark', sevincKim: '0-$ai');
     });
   }
 
@@ -4464,7 +4709,7 @@ class _MacEkraniState extends State<MacEkrani> {
       overlayAlt = alt;
       overlayT = 0;
     });
-    overlayTimer = Timer(const Duration(milliseconds: 1500), () {
+    overlayTimer = Timer(const Duration(milliseconds: 2200), () {
       if (mounted) setState(() => overlay = '');
     });
   }
@@ -4472,6 +4717,8 @@ class _MacEkraniState extends State<MacEkrani> {
   // ---- Interaktif pozisyon ----
 
   void interaktifBaslat() {
+    // 10x hizli ozetten dramatik kesintiyle sahaya don + otomatik 1x
+    if (hiz == 10) hizAyarla(1);
     interaktif = true;
     nisan = null;
     guc = 0;
@@ -4484,6 +4731,7 @@ class _MacEkraniState extends State<MacEkrani> {
     topOyuncu = 0;
     topUcuyor = false;
     ucusSonu = null;
+    interaktifT = r.nextDouble() * 6;
     benimPos[0] = const Offset(0.5, 0.20);
     top = const Offset(0.5, 0.215);
     for (int i = 1; i <= 3; i++) {
@@ -4493,11 +4741,18 @@ class _MacEkraniState extends State<MacEkrani> {
       rakipPos[i] = Offset(0.28 + 0.15 * i, 0.12 + 0.05 * (i % 2));
     }
     rakipPos[10] = const Offset(0.5, 0.045); // kaleci
+    sablonSoyle(0, oyuncu: benimIsimler[0]);
     spikerEkle('${benimIsimler[0]} büyük bir pozisyon yakaladı! Oku sürükle, hedefi seç ve gücü ayarla! 🎯');
     secimTimer?.cancel();
     secimTimer = Timer(const Duration(seconds: 6), () {
       if (mounted && interaktif) vurusYap(otomatik: true);
     });
+  }
+
+  void hizAyarla(int h) {
+    hiz = h;
+    hizEtiketT = 1;
+    hizEtiket = h == 1 ? '▶ 1x' : (h == 2 ? '▶▶ 2x' : '▶▶▶ 10x');
   }
 
   void panBaslat(DragStartDetails d) {
@@ -4574,6 +4829,10 @@ class _MacEkraniState extends State<MacEkrani> {
       guc = 0;
       gucCekiliyor = false;
       nisanCekiliyor = false;
+      sonGuc = g;
+      // Sut savurma animasyonu (300 ms geri-ileri + after-image)
+      sutT = 0.3;
+      sutAnahtar = '0-0';
     });
     if (tip == 'pas' && hi > 0) {
       pasSonuc(g, hi);
@@ -4586,11 +4845,14 @@ class _MacEkraniState extends State<MacEkrani> {
 
   void sutSonuc(double g, String kose) {
     sut++;
+    gorevKontrol();
     final String ad = benimIsimler[0];
     final double kx = kose == 'sol' ? 0.42 : 0.58;
     final String sonuc;
     final Offset hedef;
     double kavis = 0.55;
+    // Tatli nokta: birakma aninda kaleci hangi tarafta?
+    final String kaleciTaraf = rakipPos[10].dx < 0.5 ? 'sol' : 'sağ';
     if (g < 0.25) {
       sonuc = 'zayif';
       hedef = Offset(0.5 + (r.nextDouble() - 0.5) * 0.08, 0.14); // kalenin onunde olecek
@@ -4602,7 +4864,16 @@ class _MacEkraniState extends State<MacEkrani> {
       final int sutOz = ozellik(widget.kariyer, 'sut');
       final int bitOz = ozellik(widget.kariyer, 'bit');
       double p = 0.24 + (sutOz - 58) * 0.006 + (bitOz - 58) * 0.004 + kramponGucu(widget.kariyer) * 0.008;
-      if (g >= 0.45 && g <= 0.75) p += 0.08; // ideal sari bolge
+      if (g >= 0.45 && g <= 0.75) {
+        p += 0.08; // ideal sari bolge
+        mikroKartEkle('MÜKEMMEL ZAMANLAMA!', kAltin);
+      }
+      // Kaleci konumu sonucu etkiler: kalecinin oldugu koseye vurmak riskli
+      if (kose == kaleciTaraf) {
+        p -= 0.12;
+      } else {
+        p += 0.05; // ters kose = tatli nokta
+      }
       if (widget.zorluk == 'Kolay') p += 0.08;
       if (widget.zorluk == 'Zor') p -= 0.08;
       if (r.nextDouble() < p.clamp(0.05, 0.85)) {
@@ -4634,27 +4905,41 @@ class _MacEkraniState extends State<MacEkrani> {
     switch (sonuc) {
       case 'zayif':
         spikerEkle('$ad vurdu ama top çok zayıf! Kalenin önünde kaldı. 🐌');
+        mikroKartEkle('DIŞARI!', Colors.redAccent);
+        comboVur(false);
         break;
       case 'sert':
         spikerEkle('$ad çok sert vurdu! Top üstten auta çıktı! 🚀');
+        mikroKartEkle('DIŞARI!', Colors.redAccent);
+        comboVur(false);
         break;
       case 'gol':
         gol++;
         skorBiz++;
+        comboVur(true);
+        sablonSoyle(3, oyuncu: ad);
         spikerEkle('$ad $kose köşeye vurdu ve GOL! ${benimTakim.ad} ${skorBiz > skorRakip ? 'öne geçiyor' : 'skoru değiştiriyor'}! ⚽🎉');
-        golEfekt(true, 'GOOOL!', kAltin, alt: '⚽ $ad');
+        golEfekt(true, 'GOOOL!', kAltin, alt: '⚽ $ad', sevincKim: '0-0');
         break;
       case 'kurtaris':
         dalisT = 0.8;
         dalisTakim = 1; // rakip kaleci dalıyor
         dalisYon = kose == 'sol' ? -1 : 1;
+        sablonSoyle(1);
         spikerEkle('$ad $kose köşeye vurdu ama kaleci harika kurtardı! 🧤');
+        mikroKartEkle('KALECİ ÇIKARDI!', Colors.redAccent);
+        comboVur(false);
         break;
       case 'direk':
+        sablonSoyle(2);
         spikerEkle('$ad vurdu, top direkten döndü! 😱');
+        mikroKartEkle('DİREK!', Colors.orangeAccent);
+        comboVur(false);
         break;
       default:
         spikerEkle('$ad vurdu ama top az farkla auta gitti!');
+        mikroKartEkle('DIŞARI!', Colors.redAccent);
+        comboVur(false);
     }
   }
 
@@ -4665,12 +4950,16 @@ class _MacEkraniState extends State<MacEkrani> {
     if (g < 0.25) {
       topaUcus(benimPos[hi] + (top - benimPos[hi]) * 0.5, sure: 0.5, kavis: 0.2, sonu: () {
         spikerEkle('$ad pası kısa düştü, top kaybı! 🐌');
+        mikroKartEkle('PAS HATASI!', Colors.redAccent);
+        comboVur(false);
       });
       return;
     }
     if (g > 0.92) {
       topaUcus(Offset((benimPos[hi].dx + 0.3).clamp(0.0, 1.0), (benimPos[hi].dy + 0.25).clamp(0.0, 1.0)), sure: 0.6, kavis: 0.35, sonu: () {
         spikerEkle('$ad pası çok sert gönderdi, top taca çıktı!');
+        mikroKartEkle('PAS HATASI!', Colors.redAccent);
+        comboVur(false);
       });
       return;
     }
@@ -4682,9 +4971,13 @@ class _MacEkraniState extends State<MacEkrani> {
     topaUcus(hedef, sure: 0.6, kavis: 0.4, yavas: asistOlur, sonu: () {
       if (!basarili) {
         spikerEkle('$ad pas verdi ama rakip araya girdi! 😕');
+        mikroKartEkle('PAS HATASI!', Colors.redAccent);
+        comboVur(false);
         return;
       }
       pas++;
+      comboVur(true);
+      mikroKartEkle('İSABET! +10', kYesil);
       topOyuncu = hi;
       if (!asistOlur) {
         spikerEkle('$ad harika bir pas çıkardı, $ark topla buluştu! 👟');
@@ -4695,8 +4988,10 @@ class _MacEkraniState extends State<MacEkrani> {
       topaUcus(Offset(0.40 + r.nextDouble() * 0.20, -0.015), sure: 0.7, kavis: 0.55, yavas: true, sonu: () {
         asist++;
         skorBiz++;
+        comboVur(true);
+        sablonSoyle(3, oyuncu: ark);
         spikerEkle('$ark, $ad pasında topu ağlara gönderdi! ASİST! 🎯🎉');
-        golEfekt(true, 'GOOOL!', kAltin, alt: '👟 ASİST! $ad  •  ⚽ $ark');
+        golEfekt(true, 'GOOOL!', kAltin, alt: '👟 ASİST! $ad  •  ⚽ $ark', sevincKim: '0-$hi');
       });
     });
   }
@@ -4707,10 +5002,13 @@ class _MacEkraniState extends State<MacEkrani> {
     final bool berabere = skorBiz == skorRakip;
     spikerEkle('Maç sona erdi! Skor: $skorBiz v $skorRakip 📣');
     goster(galibiyet ? 'KAZANDIN! 🎉' : (berabere ? 'BERABERLİK 🤝' : 'KAYBETTİN 😞'), galibiyet ? kYesil : (berabere ? Colors.orange : Colors.red));
-    Timer(const Duration(milliseconds: 1600), () {
+    // hata #10: timer alanda tutulur, dispose'da iptal edilir
+    sonucTimer?.cancel();
+    sonucTimer = Timer(const Duration(milliseconds: 1600), () {
       if (!mounted) return;
       setState(() {
         overlay = '';
+        panelT = 0; // flip ile acilir
         fase = 'panel';
       });
     });
@@ -4750,12 +5048,27 @@ class _MacEkraniState extends State<MacEkrani> {
   Widget build(BuildContext context) {
     final Color rakipRenk = Color(widget.rakip.renk1).value == Color(benimTakim.renk1).value ? Colors.red.shade700 : Color(widget.rakip.renk1);
     String kisalt(String ad) => ad.length <= 3 ? ad.toUpperCase() : ad.substring(0, 3).toUpperCase();
+    // Gol sinematigi kamera zoomu: topa 1.18 zoom easeOutCubic + geri
+    double zoomK = 0;
+    if (golSineT > 0) {
+      final double gecen = 2.2 - golSineT;
+      zoomK = gecen < 0.4 ? Curves.easeOutCubic.transform(gecen / 0.4) : (golSineT / 1.8).clamp(0.0, 1.0);
+    }
+    final double kameraScale = (interaktif ? 1.9 : 1.0) * (1 + 0.18 * zoomK);
+    Alignment kameraHiza = interaktif ? const Alignment(0, -0.55) : Alignment.center;
+    if (!interaktif && zoomK > 0 && sahaSize.width > 1) {
+      final Offset tp2 = SahaPainter.proje(top, sahaSize);
+      kameraHiza = Alignment(
+        ((tp2.dx / sahaSize.width) * 2 - 1).clamp(-0.8, 0.8),
+        ((tp2.dy / sahaSize.height) * 2 - 1).clamp(-0.8, 0.8),
+      );
+    }
     return Scaffold(
       backgroundColor: const Color(0xFF0D1B2A),
       body: SafeArea(
         child: Column(
           children: <Widget>[
-            // Kompakt yayin tarzi skor tabelasi
+            // Kompakt yayin tarzi skor tabelasi (golde flas)
             Container(
               decoration: const BoxDecoration(
                 gradient: LinearGradient(
@@ -4767,7 +5080,6 @@ class _MacEkraniState extends State<MacEkrani> {
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               child: Row(
                 children: <Widget>[
-                  // Sol: kucuk top ikonu
                   Container(
                     width: 30,
                     height: 30,
@@ -4776,13 +5088,12 @@ class _MacEkraniState extends State<MacEkrani> {
                     child: const Text('⚽', style: TextStyle(fontSize: 14)),
                   ),
                   const Spacer(),
-                  // Orta: kompakt kapsul (kisaltma + skor + dk)
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
                     decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.72),
+                      color: Color.lerp(Colors.black.withOpacity(0.72), kAltin.withOpacity(0.85), skorFlash * 0.7),
                       borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: kAltin.withOpacity(0.7), width: 1.2),
+                      border: Border.all(color: kAltin.withOpacity(0.7 + skorFlash * 0.3), width: 1.2 + skorFlash * 2),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -4808,12 +5119,11 @@ class _MacEkraniState extends State<MacEkrani> {
                     ),
                   ),
                   const Spacer(),
-                  // Sag: hiz secimi
                   for (final int h in <int>[1, 2, 10])
                     Padding(
                       padding: const EdgeInsets.only(left: 5),
                       child: GestureDetector(
-                        onTap: () => setState(() => hiz = h),
+                        onTap: () => setState(() => hizAyarla(h)),
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
                           decoration: BoxDecoration(
@@ -4833,16 +5143,27 @@ class _MacEkraniState extends State<MacEkrani> {
             Expanded(
               child: LayoutBuilder(
                 builder: (BuildContext context, BoxConstraints cons) {
-                  sahaSize = Size(cons.maxWidth, cons.maxHeight);
+                  final Size yeni = Size(cons.maxWidth, cons.maxHeight);
+                  // hata #13: build icinde state yazimi yerine post-frame callback
+                  if (yeni != sahaSize) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted && yeni != sahaSize) setState(() => sahaSize = yeni);
+                    });
+                  }
                   return Stack(
                     children: <Widget>[
+                      // Statik katman: zemin + tribun + pano + cizgiler (ayri RepaintBoundary)
+                      Positioned.fill(
+                        child: RepaintBoundary(
+                          child: CustomPaint(painter: zeminPainter),
+                        ),
+                      ),
+                      // Dinamik katman: oyuncular + top + parcaciklar
                       Transform.translate(
                         offset: Offset(sin(sarsinti * 40) * 6 * sarsinti, cos(sarsinti * 33) * 5 * sarsinti),
-                        child: AnimatedScale(
-                          scale: interaktif ? 1.9 : 1.0,
-                          alignment: const Alignment(0, -0.55),
-                          duration: const Duration(milliseconds: 500),
-                          curve: Curves.easeInOut,
+                        child: Transform.scale(
+                          scale: kameraScale,
+                          alignment: kameraHiza,
                           child: SizedBox(
                             width: cons.maxWidth,
                             height: cons.maxHeight,
@@ -4851,76 +5172,49 @@ class _MacEkraniState extends State<MacEkrani> {
                               onPanUpdate: panGuncelle,
                               onPanEnd: panBitir,
                               child: CustomPaint(
-                                size: sahaSize,
-                                painter: SahaPainter(
-                                  benimPos: benimPos,
-                                  rakipPos: rakipPos,
-                                  top: top,
-                                  topYukseklik: topYukseklik,
-                                  benimRenk: Color(benimTakim.renk1),
-                                  benimRenk2: Color(benimTakim.renk2),
-                                  rakipRenk: rakipRenk,
-                                  rakipRenk2: Color(widget.rakip.renk2),
-                                  benimIsimler: benimIsimler,
-                                  rakipIsimler: rakipIsimler,
-                                  formaNo: kInt(widget.kariyer, 'formaNo', 99),
-                                  nisan: nisan,
-                                  hedefTip: hedefTip,
-                                  hedefIndex: hedefIndex,
-                                  hedefKose: hedefKose,
-                                  interaktif: interaktif,
-                                  konfeti: konfeti,
-                                  topIz: topIz,
-                                  animT: animT,
-                                  agUst: agUst,
-                                  agAlt: agAlt,
-                                  topTakim: topTakim,
-                                  topOyuncu: topOyuncu,
-                                  topUcuyor: topUcuyor,
-                                  dalisT: dalisT,
-                                  dalisTakim: dalisTakim,
-                                  dalisYon: dalisYon,
-                                ),
+                                size: yeni,
+                                painter: sahaPainter,
                               ),
                             ),
                           ),
                         ),
                       ),
-                      // Sinematik ust/alt karartma (vinyet)
-                      Positioned(
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        height: 46,
+                      // Vignette: ayri RepaintBoundary katmani
+                      Positioned.fill(
                         child: IgnorePointer(
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                begin: Alignment.topCenter,
-                                end: Alignment.bottomCenter,
-                                colors: <Color>[Colors.black.withOpacity(0.38), Colors.transparent],
+                          child: RepaintBoundary(
+                            child: CustomPaint(painter: VinyetPainter()),
+                          ),
+                        ),
+                      ),
+                      // 10x hizli ozet: ekran kararir, sadece spiker + dk + skor akar
+                      if (hiz == 10 && fase == 'oyun' && !interaktif)
+                        Positioned.fill(
+                          child: IgnorePointer(
+                            child: Container(
+                              color: Colors.black.withOpacity(0.88),
+                              alignment: Alignment.center,
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: <Widget>[
+                                  const Text('HIZLI ÖZET', style: TextStyle(color: Colors.white54, fontSize: 12, letterSpacing: 3, fontWeight: FontWeight.bold)),
+                                  const SizedBox(height: 6),
+                                  Text("$skorBiz - $skorRakip   ${dakika.floor()}'",
+                                      style: const TextStyle(color: kAltin, fontSize: 34, fontWeight: FontWeight.w900)),
+                                  const SizedBox(height: 8),
+                                  if (spiker.isNotEmpty)
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                                      child: Text('🎙 ${spikerSonYazi()}',
+                                          maxLines: 2,
+                                          textAlign: TextAlign.center,
+                                          style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                                    ),
+                                ],
                               ),
                             ),
                           ),
                         ),
-                      ),
-                      Positioned(
-                        bottom: 0,
-                        left: 0,
-                        right: 0,
-                        height: 46,
-                        child: IgnorePointer(
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                begin: Alignment.bottomCenter,
-                                end: Alignment.topCenter,
-                                colors: <Color>[Colors.black.withOpacity(0.38), Colors.transparent],
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
                       // Interaktif bilgi kutusu
                       if (interaktif)
                         Positioned(
@@ -4939,9 +5233,54 @@ class _MacEkraniState extends State<MacEkrani> {
                             ),
                           ),
                         ),
-                      // Guc gostergesi (en ustte, dikey, asagi dolan)
+                      // Guc gostergesi + tatli nokta cubugu
                       if (interaktif) gucCubugu(),
-                      // Vuruş mesafesi kutusu (siyah kapsul, altin yazi)
+                      if (interaktif)
+                        Positioned(
+                          top: 6,
+                          left: 8,
+                          child: tatliNoktaBar(),
+                        ),
+                      // Mac ici mini gorev cipleri (sag ust)
+                      if (fase == 'oyun')
+                        Positioned(
+                          top: 8,
+                          right: 10,
+                          child: gorevCipleri(),
+                        ),
+                      // FORMDAYIM rozeti (sol ust)
+                      if (combo >= 3 && fase == 'oyun')
+                        Positioned(
+                          top: 8,
+                          left: 10,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.75),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: const Color(0xFFFF7043), width: 1.5),
+                            ),
+                            child: Text('🔥 FORMDAYIM x$combo',
+                                style: const TextStyle(color: Color(0xFFFF7043), fontSize: 13, fontWeight: FontWeight.w900)),
+                          ),
+                        ),
+                      // Mikro sonuc kartlari (floating text)
+                      for (final MikroKart k in kartlar) mikroKartWidget(k, cons),
+                      // Hiz degisim etiketi (1 sn)
+                      if (hizEtiketT > 0)
+                        Positioned(
+                          bottom: 12,
+                          right: 12,
+                          child: Opacity(
+                            opacity: hizEtiketT.clamp(0.0, 1.0),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(color: Colors.black87, borderRadius: BorderRadius.circular(10), border: Border.all(color: kAltin)),
+                              child: Text(hizEtiket, style: const TextStyle(color: kAltin, fontSize: 14, fontWeight: FontWeight.bold)),
+                            ),
+                          ),
+                        ),
+                      // Vuruş mesafesi kutusu
                       if (mesafeYazi.isNotEmpty)
                         Positioned(
                           top: 8,
@@ -4956,72 +5295,8 @@ class _MacEkraniState extends State<MacEkrani> {
                             child: Text(mesafeYazi, style: const TextStyle(color: kAltin, fontSize: 16, fontWeight: FontWeight.w900, letterSpacing: 0.5)),
                           ),
                         ),
-                      // GOL / skor banneri (dev yazi + siyah kontur + hafif sallanim)
-                      if (overlay.isNotEmpty)
-                        Center(
-                          child: Transform.scale(
-                            scale: 0.6 + 0.4 * Curves.elasticOut.transform(overlayT),
-                            child: Transform.rotate(
-                              angle: sin(overlayT * 18) * 0.05 * (1 - overlayT),
-                              child: Opacity(
-                                opacity: (overlayT * 2.5).clamp(0.0, 1.0),
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: <Widget>[
-                                    Stack(
-                                      children: <Widget>[
-                                        // kalin siyah kontur
-                                        Text(
-                                          overlay,
-                                          textAlign: TextAlign.center,
-                                          style: TextStyle(
-                                            fontSize: overlayBoyut,
-                                            fontWeight: FontWeight.w900,
-                                            letterSpacing: 2,
-                                            foreground: Paint()
-                                              ..style = PaintingStyle.stroke
-                                              ..strokeWidth = overlayBoyut / 7
-                                              ..strokeJoin = StrokeJoin.round
-                                              ..color = Colors.black,
-                                          ),
-                                        ),
-                                        // altin/renk dolgu + parlama
-                                        Text(
-                                          overlay,
-                                          textAlign: TextAlign.center,
-                                          style: TextStyle(
-                                            color: overlayRenk,
-                                            fontSize: overlayBoyut,
-                                            fontWeight: FontWeight.w900,
-                                            letterSpacing: 2,
-                                            shadows: <Shadow>[
-                                              Shadow(blurRadius: 26, color: overlayRenk.withOpacity(0.85)),
-                                              const Shadow(blurRadius: 6, color: Colors.black),
-                                            ],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    if (overlayAlt.isNotEmpty)
-                                      Container(
-                                        margin: const EdgeInsets.only(top: 6),
-                                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
-                                        decoration: BoxDecoration(
-                                          color: Colors.black.withOpacity(0.78),
-                                          borderRadius: BorderRadius.circular(14),
-                                          border: Border.all(color: overlayRenk.withOpacity(0.7)),
-                                        ),
-                                        child: Text(
-                                          overlayAlt,
-                                          style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold, letterSpacing: 0.5),
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
+                      // GOOOL banneri (yarim siyah bant + dev yazi)
+                      if (overlay.isNotEmpty) golBanneri(),
                       // Devre arası paneli
                       if (fase == 'devre') devrePanel(),
                       // Maç sonu paneli
@@ -5033,7 +5308,7 @@ class _MacEkraniState extends State<MacEkrani> {
                 },
               ),
             ),
-            // Alt bar: spiker (max 5 satir, son satir vurgulu)
+            // Alt bar: spiker (max 5 satir, son satir yazi makinesi efektli)
             Container(
               color: Colors.black.withOpacity(0.75),
               width: double.infinity,
@@ -5044,7 +5319,7 @@ class _MacEkraniState extends State<MacEkrani> {
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: <Widget>[
                   for (int i = 0; i < spiker.length; i++)
-                    Text('🎙 ${spiker[i]}',
+                    Text('🎙 ${i == spiker.length - 1 ? spikerSonYazi() : spiker[i]}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -5053,6 +5328,200 @@ class _MacEkraniState extends State<MacEkrani> {
                           fontWeight: i == spiker.length - 1 ? FontWeight.bold : FontWeight.normal,
                         )),
                 ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Yazi makinesi efekti: 20 ms/harf pop-in
+  String spikerSonYazi() {
+    if (spiker.isEmpty) return '';
+    final String s = spiker.last;
+    final int n = (spikerT / 0.02).floor();
+    return n >= s.length ? s : s.substring(0, n.clamp(0, s.length));
+  }
+
+  Widget mikroKartWidget(MikroKart k, BoxConstraints cons) {
+    final double op = (1 - k.t).clamp(0.0, 1.0);
+    final double yuk = k.t * 46; // yukari suzulur
+    if (k.buyuk) {
+      return Positioned(
+        top: cons.maxHeight * 0.30 - yuk,
+        left: 0,
+        right: 0,
+        child: IgnorePointer(
+          child: Opacity(
+            opacity: op,
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.85),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: k.renk, width: 2),
+                ),
+                child: Text(k.yazi, style: TextStyle(color: k.renk, fontSize: 24, fontWeight: FontWeight.w900, letterSpacing: 1.5)),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    final int idx = kartlar.indexOf(k);
+    return Positioned(
+      top: cons.maxHeight * 0.16 + idx * 30 - yuk,
+      left: 0,
+      right: 0,
+      child: IgnorePointer(
+        child: Opacity(
+          opacity: op,
+          child: Center(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.8),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: k.renk.withOpacity(0.9)),
+              ),
+              child: Text(k.yazi, style: TextStyle(color: k.renk, fontSize: 14, fontWeight: FontWeight.bold)),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget gorevCipleri() {
+    const List<String> adlar = <String>['İlk şutunu çek', '2 isabetli pas', 'Combo x3'];
+    final List<int> hedefler = <int>[1, 2, 3];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: <Widget>[
+        for (int i = 0; i < 3; i++)
+          Container(
+            margin: const EdgeInsets.only(bottom: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: gorevBitti[i] ? kYesil.withOpacity(0.9) : Colors.black.withOpacity(0.7),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: gorevBitti[i] ? Colors.white : Colors.white38),
+            ),
+            child: Text(
+              gorevBitti[i] ? '✓ ${adlar[i]}' : '${adlar[i]} ${gorevIlerleme[i]}/${hedefler[i]}',
+              style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+            ),
+          ),
+      ],
+    );
+  }
+
+  // Tatli nokta cubugu: kale genisligi; koseler yesil, kaleci bolgesi kirmizi
+  Widget tatliNoktaBar() {
+    final double kx = ((rakipPos[10].dx - 0.38) / 0.24).clamp(0.0, 1.0); // kale agzindaki konum
+    const double gen = 120;
+    const double yuk = 14;
+    return Container(
+      width: gen,
+      height: yuk,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(7),
+        border: Border.all(color: Colors.white70, width: 1.2),
+        color: Colors.black54,
+      ),
+      child: Stack(
+        children: <Widget>[
+          // yesil tatli koseler
+          Positioned(left: 0, top: 0, bottom: 0, width: gen * 0.25, child: Container(color: kYesil.withOpacity(0.75))),
+          Positioned(right: 0, top: 0, bottom: 0, width: gen * 0.25, child: Container(color: kYesil.withOpacity(0.75))),
+          // kaleci kirmizi bolge (kayar)
+          Positioned(
+            left: (kx * gen - gen * 0.10).clamp(0.0, gen * 0.8),
+            top: 0,
+            bottom: 0,
+            width: gen * 0.20,
+            child: Container(color: Colors.redAccent.withOpacity(0.85)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // GOOOL / sonuc banneri: yarim siyah bant, overshoot giris, 10° tilt sallanim
+  Widget golBanneri() {
+    final bool golYazi = overlay.contains('GOOOL');
+    return Center(
+      child: IgnorePointer(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Container(
+              width: double.infinity,
+              color: Colors.black.withOpacity(0.55),
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              child: Transform.scale(
+                scale: 0.6 + 0.4 * Curves.elasticOut.transform(overlayT),
+                child: Transform.rotate(
+                  angle: sin(overlayT * 18) * 0.17 * (1 - overlayT), // ~10° tilt sallanim
+                  child: Opacity(
+                    opacity: (overlayT * 2.5).clamp(0.0, 1.0),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        Stack(
+                          children: <Widget>[
+                            Text(
+                              overlay,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: overlayBoyut,
+                                fontWeight: FontWeight.w900,
+                                fontStyle: golYazi ? FontStyle.italic : FontStyle.normal,
+                                letterSpacing: 2,
+                                foreground: Paint()
+                                  ..style = PaintingStyle.stroke
+                                  ..strokeWidth = 4
+                                  ..strokeJoin = StrokeJoin.round
+                                  ..color = golYazi ? const Color(0xFFE63946) : Colors.black,
+                              ),
+                            ),
+                            Text(
+                              overlay,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: golYazi ? Colors.white : overlayRenk,
+                                fontSize: overlayBoyut,
+                                fontWeight: FontWeight.w900,
+                                fontStyle: golYazi ? FontStyle.italic : FontStyle.normal,
+                                letterSpacing: 2,
+                                shadows: <Shadow>[
+                                  Shadow(blurRadius: 26, color: overlayRenk.withOpacity(0.85)),
+                                  const Shadow(blurRadius: 6, color: Colors.black),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (overlayAlt.isNotEmpty)
+                          Container(
+                            margin: const EdgeInsets.only(top: 6),
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.78),
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(color: overlayRenk.withOpacity(0.7)),
+                            ),
+                            child: Text(
+                              overlayAlt,
+                              style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
               ),
             ),
           ],
@@ -5091,6 +5560,18 @@ class _MacEkraniState extends State<MacEkrani> {
   }
 
   Widget devrePanel() {
+    final double k = (devreT / 1.2).clamp(0.0, 1.0); // sayac animasyonu
+    Widget sayac(String etiket, int deger, String ikon) {
+      final int goster = (deger * k).round();
+      return Column(
+        children: <Widget>[
+          Text(ikon, style: const TextStyle(fontSize: 22)),
+          Text('$goster', style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: kYesil)),
+          Text(etiket, style: const TextStyle(fontSize: 12, color: Colors.black54)),
+        ],
+      );
+    }
+
     return Center(
       child: Container(
         margin: const EdgeInsets.all(30),
@@ -5099,12 +5580,23 @@ class _MacEkraniState extends State<MacEkrani> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            const Text('⏸ Devre Arası', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: kYesil)),
+            const Text('⏸ DEVRE ARASI', style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: kYesil, letterSpacing: 1.5)),
             const SizedBox(height: 8),
             Text('$skorBiz v $skorRakip', style: const TextStyle(fontSize: 40, fontWeight: FontWeight.w900)),
-            const SizedBox(height: 8),
-            Text('İstatistiklerin: $gol gol • $asist asist • $pas pas • $sut şut', style: const TextStyle(fontSize: 17)),
-            const SizedBox(height: 14),
+            const SizedBox(height: 10),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                sayac('Gol', gol, '⚽'),
+                const SizedBox(width: 26),
+                sayac('Pas', pas, '👟'),
+                const SizedBox(width: 26),
+                sayac('Şut', sut, '🥅'),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text('Asist: $asist', style: const TextStyle(fontSize: 14, color: Colors.black54)),
+            const SizedBox(height: 12),
             buyukButon(
               yazi: '▶ Maça Devam Et',
               renk: kYesil,
@@ -5124,33 +5616,43 @@ class _MacEkraniState extends State<MacEkrani> {
   Widget sonucPanel() {
     final bool galibiyet = skorBiz > skorRakip;
     final bool berabere = skorBiz == skorRakip;
+    // 1.5 sn bekleme (sonucTimer) sonrasi flip ile acilir
+    final double flip = (1 - panelT.clamp(0.0, 1.0)) * pi / 2;
     return Center(
-      child: Container(
-        margin: const EdgeInsets.all(26),
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Text(galibiyet ? '🎉 Kazandın!' : (berabere ? '🤝 Beraberlik' : '😞 Kaybettin'), style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 6),
-            Text('$skorBiz v $skorRakip', style: const TextStyle(fontSize: 38, fontWeight: FontWeight.w900)),
-            const Divider(height: 20),
-            const Text('📋 Maç Bilgilerin', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: kYesil)),
-            const SizedBox(height: 6),
-            Text('⚽ Gol: $gol    🎯 Asist: $asist', style: const TextStyle(fontSize: 19)),
-            Text('👟 Pas: $pas    🥅 Şut: $sut', style: const TextStyle(fontSize: 19)),
-            const SizedBox(height: 8),
-            Text('⭐ Maç Reytingin: ${rating().toStringAsFixed(1)}', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: kTuruncu)),
-            const SizedBox(height: 12),
-            buyukButon(
-              yazi: '🎤 Röportaja Git',
-              onPressed: () {
-                roportajHazirla();
-                setState(() => fase = 'roportaj');
-              },
-            ),
-          ],
+      child: Transform(
+        alignment: Alignment.center,
+        transform: Matrix4.identity()
+          ..setEntry(3, 2, 0.001)
+          ..rotateY(flip),
+        child: Container(
+          margin: const EdgeInsets.all(26),
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              const Text('MAÇ SONUCU', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900, letterSpacing: 2, color: Colors.black45)),
+              const SizedBox(height: 4),
+              Text(galibiyet ? '🎉 Kazandın!' : (berabere ? '🤝 Beraberlik' : '😞 Kaybettin'), style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              Text('$skorBiz v $skorRakip', style: const TextStyle(fontSize: 38, fontWeight: FontWeight.w900)),
+              const Divider(height: 20),
+              const Text('📋 Maç Bilgilerin', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: kYesil)),
+              const SizedBox(height: 6),
+              Text('⚽ Gol: $gol    🎯 Asist: $asist', style: const TextStyle(fontSize: 19)),
+              Text('👟 Pas: $pas    🥅 Şut: $sut', style: const TextStyle(fontSize: 19)),
+              const SizedBox(height: 8),
+              Text('⭐ Maç Reytingin: ${rating().toStringAsFixed(1)}', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: kTuruncu)),
+              const SizedBox(height: 12),
+              buyukButon(
+                yazi: '🎤 Röportaja Git',
+                onPressed: () {
+                  roportajHazirla();
+                  setState(() => fase = 'roportaj');
+                },
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -5227,310 +5729,262 @@ class _MacEkraniState extends State<MacEkrani> {
   }
 }
 
-// Üstten görünümlü saha + oyuncular + top + konfeti çizimi (NSS tarzı düz üstten)
-class SahaPainter extends CustomPainter {
-  final List<Offset> benimPos;
-  final List<Offset> rakipPos;
-  final Offset top;
-  final double topYukseklik;
-  final Color benimRenk;
-  final Color benimRenk2;
-  final Color rakipRenk;
-  final Color rakipRenk2;
-  final List<String> benimIsimler;
-  final List<String> rakipIsimler;
-  final int formaNo;
-  final Offset? nisan;
-  final String hedefTip;
-  final int hedefIndex;
-  final String hedefKose;
-  final bool interaktif;
-  final List<Konfeti> konfeti;
-  final List<Offset> topIz;
-  final double animT;
-  final double agUst;
-  final double agAlt;
-  final int topTakim;
-  final int topOyuncu;
-  final bool topUcuyor;
-  final double dalisT;
-  final int dalisTakim;
-  final double dalisYon;
+// ---------- STATIK KATMAN: zemin + tribun + pano + cizgiler ----------
+// (ayri RepaintBoundary icinde; sadece tribun ziplamasi / pano donusu degisince yenilenir)
+class ZeminPainter extends CustomPainter {
+  final _MacEkraniState s;
+  ZeminPainter(this.s);
 
-  SahaPainter({
-    required this.benimPos,
-    required this.rakipPos,
-    required this.top,
-    required this.topYukseklik,
-    required this.benimRenk,
-    required this.benimRenk2,
-    required this.rakipRenk,
-    required this.rakipRenk2,
-    required this.benimIsimler,
-    required this.rakipIsimler,
-    required this.formaNo,
-    required this.nisan,
-    required this.hedefTip,
-    required this.hedefIndex,
-    required this.hedefKose,
-    required this.interaktif,
-    required this.konfeti,
-    required this.topIz,
-    required this.animT,
-    required this.agUst,
-    required this.agAlt,
-    required this.topTakim,
-    required this.topOyuncu,
-    required this.topUcuyor,
-    required this.dalisT,
-    required this.dalisTakim,
-    required this.dalisYon,
-  });
+  // Seed'li tribun noktalari (bir kez uretilir, ~400 nokta, 2 katman)
+  List<Offset>? _noktalar; // x: 0..1 gen, y: 0..1 tribun derinligi
+  List<int>? _renkIdx;
+  static const List<Color> kPalet = <Color>[
+    Color(0xFFE63946), Color(0xFFF1FA8C), Color(0xFF457B9D), Color(0xFFF4F4F4), Color(0xFF2A9D8F),
+  ];
+  static const List<String> kMarkalar = <String>['CEA GAMES', 'YILDIZ SPOR', 'KRAMPO MAX'];
+  static const List<Color> kMarkaRenk = <Color>[Color(0xFFFFD54F), Color(0xFF64B5F6), Color(0xFFEF5350)];
 
-  // Oyuncu hareket hizi takibi (kosma animasyonu icin; painter her frame yenilendigi icin static)
-  static final Map<String, Offset> _sonPos = <String, Offset>{};
-  static final Map<String, double> _kosFaz = <String, double>{};
-
-  // --- Düz üstten projeksiyon: dikey saha, saldırılan kale üstte ---
-  static const double sol = 0.075; // w oranı
-  static const double sag = 0.925;
-  static const double ust = 0.115; // h oranı (üstte tribün + reklam bandı)
-  static const double alt = 0.895; // altta reklam bandı + tribün
-
-  // Saha koordinatını (0..1) ekrana dönüştürür
-  static Offset proje(Offset s, Size size) {
-    return Offset(
-      size.width * (sol + s.dx * (sag - sol)),
-      size.height * (ust + s.dy * (alt - ust)),
-    );
+  void tribunHazirla() {
+    if (_noktalar != null) return;
+    final Random rr = Random(42);
+    _noktalar = <Offset>[];
+    _renkIdx = <int>[];
+    for (int i = 0; i < 400; i++) {
+      _noktalar!.add(Offset(rr.nextDouble(), rr.nextDouble()));
+      _renkIdx!.add(rr.nextInt(kPalet.length));
+    }
   }
 
-  // Ekran noktasını saha koordinatına çevirir (nişan için)
-  static Offset tersProje(Offset p, Size size) {
-    final double x = ((p.dx / size.width - sol) / (sag - sol)).clamp(0.0, 1.0);
-    final double y = ((p.dy / size.height - ust) / (alt - ust)).clamp(0.0, 1.0);
-    return Offset(x, y);
-  }
-
-  void yazi(Canvas canvas, String s, Offset merkez, double boyut, Color renk, {bool kalin = false}) {
+  void yazi(Canvas canvas, String metin, Offset merkez, double boyut, Color renk, {bool kalin = false}) {
     final TextPainter tp = TextPainter(
-      text: TextSpan(
-        text: s,
-        style: TextStyle(
-          color: renk,
-          fontSize: boyut,
-          fontWeight: kalin ? FontWeight.bold : FontWeight.normal,
-          shadows: const <Shadow>[Shadow(blurRadius: 2, color: Colors.black)],
-        ),
-      ),
+      text: TextSpan(text: metin, style: TextStyle(color: renk, fontSize: boyut, fontWeight: kalin ? FontWeight.bold : FontWeight.normal)),
       textDirection: TextDirection.ltr,
     )..layout();
     tp.paint(canvas, merkez - Offset(tp.width / 2, tp.height / 2));
   }
 
-  void cizgiCiz(Canvas canvas, Size size, double x1, double y1, double x2, double y2, Paint p) {
-    // Kabarik his: cizgilerin 1px altina %20 siyah golge
-    final Paint golge = Paint()
-      ..color = Colors.black.withOpacity(0.20)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = p.strokeWidth;
-    canvas.drawLine(proje(Offset(x1, y1), size) + const Offset(0, 1), proje(Offset(x2, y2), size) + const Offset(0, 1), golge);
-    canvas.drawLine(proje(Offset(x1, y1), size), proje(Offset(x2, y2), size), p);
+  // Saha icindeki dortgeni (saha koordinatlarindan) ciz
+  Path sahaYolu(Size size, double x1, double y1, double x2, double y2) {
+    final Offset a = SahaPainter.proje(Offset(x1, y1), size);
+    final Offset b = SahaPainter.proje(Offset(x2, y1), size);
+    final Offset c = SahaPainter.proje(Offset(x2, y2), size);
+    final Offset d = SahaPainter.proje(Offset(x1, y2), size);
+    return Path()
+      ..moveTo(a.dx, a.dy)
+      ..lineTo(b.dx, b.dy)
+      ..lineTo(c.dx, c.dy)
+      ..lineTo(d.dx, d.dy)
+      ..close();
   }
 
-  Rect sahaRect(Size size, double x1, double y1, double x2, double y2) {
-    final Offset a = proje(Offset(x1, y1), size);
-    final Offset b = proje(Offset(x2, y2), size);
-    return Rect.fromLTRB(a.dx, a.dy, b.dx, b.dy);
+  void cizgi(Canvas canvas, Size size, double x1, double y1, double x2, double y2, Paint p) {
+    canvas.drawLine(SahaPainter.proje(Offset(x1, y1), size), SahaPainter.proje(Offset(x2, y2), size), p);
   }
 
   @override
   void paint(Canvas canvas, Size size) {
+    tribunHazirla();
     final double w = size.width;
     final double h = size.height;
+    final double ustY = h * SahaPainter.ust;
+    final double altY = h * SahaPainter.alt;
 
-    // --- Zemin: koyu stadyum çerçevesi ---
+    // --- Stadyum zemini (saha disi koyu) ---
     canvas.drawRect(Rect.fromLTWH(0, 0, w, h), Paint()..color = const Color(0xFF14261A));
 
-    // --- Tribün hissi: üst + alt + yanlarda renkli nokta seyirci bantları ---
-    const List<Color> seyirci = <Color>[
-      Color(0xFFEF5350), Color(0xFFFFCA28), Color(0xFF42A5F5), Color(0xFFEC407A),
-      Color(0xFF66BB6A), Color(0xFFFFA726), Color(0xFFAB47BC), Color(0xFFEEEEEE),
-    ];
-    void seyirciBandi(double x0, double y0, double x1, double y1, bool yatay) {
-      if (yatay) {
-        const int sira = 6;
-        for (double xx = x0 + 3; xx < x1 - 2; xx += 6) {
-          for (int row = 0; row < sira; row++) {
-            final int ci = (xx.floor() * 7 + row * 13) % seyirci.length;
-            // Yasayan tribun: noktalar hafif titrer (parlaklik dalgalanir)
-            final double tit = 0.55 + 0.45 * (0.5 + 0.5 * sin(animT * 3.2 + xx * 0.35 + row * 1.7));
-            canvas.drawCircle(
-              Offset(xx + (row % 2) * 3, y0 + 2.5 + row * (y1 - y0 - 5) / (sira - 1)),
-              1.7,
-              Paint()..color = seyirci[ci].withOpacity(tit),
-            );
-          }
-        }
-      } else {
-        for (double yy = y0 + 4; yy < y1 - 2; yy += 7) {
-          for (int col = 0; col < 2; col++) {
-            final int ci = (yy.floor() * 5 + col * 11) % seyirci.length;
-            final double tit = 0.55 + 0.45 * (0.5 + 0.5 * sin(animT * 2.8 + yy * 0.4 + col * 2.3));
-            canvas.drawCircle(
-              Offset(x0 + 3 + col * (x1 - x0 - 6), yy + (col % 2) * 3),
-              1.6,
-              Paint()..color = seyirci[ci].withOpacity(tit),
-            );
-          }
-        }
+    // --- Tribun: 2 katman, seed'li ~400 nokta; golde 4px ziplama dalgasi ---
+    final double tribunAlt = ustY - 16;
+    canvas.drawRect(Rect.fromLTWH(0, 0, w, tribunAlt), Paint()..color = const Color(0xFF1C272E));
+    // katman ayrimi
+    canvas.drawRect(Rect.fromLTWH(0, tribunAlt * 0.5, w, 2), Paint()..color = Colors.black38);
+    for (int i = 0; i < _noktalar!.length; i++) {
+      final Offset n = _noktalar![i];
+      final double nx = n.dx * w;
+      final double ny = 3 + n.dy * (tribunAlt - 8);
+      // gol ziplamasi: x'e gore dalga, 4 px
+      double zip = 0;
+      if (s.tribunZipla > 0) {
+        zip = -4 * s.tribunZipla * (0.5 + 0.5 * sin(n.dx * 14 + s.tribunZipla * 20));
       }
+      canvas.drawCircle(Offset(nx, ny + zip), 1.8, Paint()..color = kPalet[_renkIdx![i]]);
     }
 
-    final double sahaSolX = w * sol;
-    final double sahaSagX = w * sag;
-    final double sahaUstY = h * ust;
-    final double sahaAltY = h * alt;
-    // Üst tribün (en üst şerit)
-    canvas.drawRect(Rect.fromLTWH(0, 0, w, h * 0.045), Paint()..color = const Color(0xFF1C272E));
-    seyirciBandi(0, 0, w, h * 0.045, true);
-    // Alt tribün
-    canvas.drawRect(Rect.fromLTWH(0, h * 0.955, w, h * 0.045), Paint()..color = const Color(0xFF1C272E));
-    seyirciBandi(0, h * 0.955, w, h, true);
-    // Yan tribünler (saha hizasında ince şeritler)
-    canvas.drawRect(Rect.fromLTWH(0, sahaUstY, w * 0.035, sahaAltY - sahaUstY), Paint()..color = const Color(0xFF1C272E));
-    canvas.drawRect(Rect.fromLTWH(w * 0.965, sahaUstY, w * 0.035, sahaAltY - sahaUstY), Paint()..color = const Color(0xFF1C272E));
-    seyirciBandi(0, sahaUstY, w * 0.035, sahaAltY, false);
-    seyirciBandi(w * 0.965, sahaUstY, w * 0.035, sahaAltY, false);
+    // --- Reklam panolari: ust kenar boyunca yamuga paralel serit, 3 donen metin ---
+    final Offset pSol = SahaPainter.proje(const Offset(0, -0.035), size);
+    final Offset pSag = SahaPainter.proje(const Offset(1, -0.035), size);
+    final Path pano = Path()
+      ..moveTo(pSol.dx, pSol.dy - 6)
+      ..lineTo(pSag.dx, pSag.dy - 6)
+      ..lineTo(pSag.dx, pSag.dy + 8)
+      ..lineTo(pSol.dx, pSol.dy + 8)
+      ..close();
+    canvas.drawPath(pano, Paint()..color = const Color(0xFF060606));
+    final int mi = (s.animT / 6).floor() % kMarkalar.length; // 6 sn'de degisir
+    final double panoGen = (pSag.dx - pSol.dx);
+    for (int k = 0; k < 4; k++) {
+      yazi(canvas, kMarkalar[mi], Offset(pSol.dx + panoGen * (0.14 + 0.24 * k), (pSol.dy + pSag.dy) / 2 + 1), 9, kMarkaRenk[mi], kalin: true);
+    }
 
-    // --- Reklam panosu şeritleri (siyah zemin, renkli kurgu markalar) ---
-    const List<List<dynamic>> markalar = <List<dynamic>>[
-      <dynamic>['CEA GAMES', 0xFFFFD54F],
-      <dynamic>['YILDIZ SPOR', 0xFF64B5F6],
-      <dynamic>['KRAMPO MAX', 0xFFEF5350],
-      <dynamic>['ALTIN LİG', 0xFFFFB300],
-    ];
-    void panoSeridi(double y0, double y1) {
-      canvas.drawRect(Rect.fromLTWH(0, y0, w, y1 - y0), Paint()..color = const Color(0xFF060606));
-      int mi = 0;
-      double xx = 6;
-      while (xx < w - 10) {
-        final List<dynamic> m = markalar[mi % markalar.length];
-        final String ad = m[0] as String;
-        final Color renk = Color(m[1] as int);
-        final double pw = ad.length * 7.0 + 20;
-        final Rect r = Rect.fromLTWH(xx, y0 + 2.5, pw, y1 - y0 - 5);
-        canvas.drawRRect(RRect.fromRectAndRadius(r, const Radius.circular(3)), Paint()..color = const Color(0xFF111111));
-        canvas.drawRRect(
-          RRect.fromRectAndRadius(r, const Radius.circular(3)),
-          Paint()
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 1
-            ..color = renk.withOpacity(0.55),
+    // --- Cim: #3E7C43 zemin + 8 dikey bicilmis serit (#4A9152 alfa 0.5) ---
+    canvas.drawPath(sahaYolu(size, -0.02, -0.02, 1.02, 1.02), Paint()..color = const Color(0xFF3E7C43));
+    for (int i = 0; i < 8; i++) {
+      if (i.isOdd) {
+        canvas.drawPath(
+          sahaYolu(size, i / 8, -0.02, (i + 1) / 8, 1.02),
+          Paint()..color = const Color(0xFF4A9152).withOpacity(0.5),
         );
-        yazi(canvas, ad, r.center, 9.5, renk, kalin: true);
-        xx += pw + 12;
-        mi++;
       }
     }
+    // --- 2 buyuk yumusak projektor isigi elipsi (#FFF8E1 alfa 0.06) ---
+    final Paint isik = Paint()..color = const Color(0xFFFFF8E1).withOpacity(0.06);
+    canvas.drawOval(Rect.fromCenter(center: Offset(w * 0.30, h * (SahaPainter.ust + SahaPainter.alt) / 2), width: w * 0.55, height: (altY - ustY) * 0.7), isik);
+    canvas.drawOval(Rect.fromCenter(center: Offset(w * 0.72, h * (SahaPainter.ust + SahaPainter.alt) / 2 + 10), width: w * 0.55, height: (altY - ustY) * 0.7), isik);
 
-    panoSeridi(h * 0.050, h * 0.105); // üst panolar
-    panoSeridi(h * 0.905, h * 0.955); // alt panolar
-
-    // --- Cim: 8 genis dikey bicim seridi + yatay ince gecis + projektor isigi/vinyet ---
-    final Rect cimRect = Rect.fromLTRB(sahaSolX, sahaUstY, sahaSagX, sahaAltY);
-    canvas.save();
-    canvas.clipRect(cimRect);
-    const int seritSayi = 8;
-    for (int i = 0; i < seritSayi; i++) {
-      final Color renk = i.isEven ? const Color(0xFF2E7D32) : const Color(0xFF256B29);
-      canvas.drawRect(
-        Rect.fromLTRB(sahaSolX + (sahaSagX - sahaSolX) * i / seritSayi, sahaUstY, sahaSolX + (sahaSagX - sahaSolX) * (i + 1) / seritSayi, sahaAltY),
-        Paint()..color = renk,
-      );
-    }
-    // Yatay ince serit gecisleri (bicme izi hissi)
-    for (int i = 0; i < 26; i++) {
-      final double yy = sahaUstY + (sahaAltY - sahaUstY) * i / 26;
-      canvas.drawRect(
-        Rect.fromLTRB(sahaSolX, yy, sahaSagX, yy + (sahaAltY - sahaUstY) / 52),
-        Paint()..color = (i.isEven ? Colors.white : Colors.black).withOpacity(0.035),
-      );
-    }
-    // Radyal projektor isigi: saha ortasi daha aydinlik
-    canvas.drawRect(
-      cimRect,
-      Paint()
-        ..shader = RadialGradient(
-          colors: <Color>[Colors.white.withOpacity(0.10), Colors.transparent],
-          stops: const <double>[0.0, 0.75],
-        ).createShader(cimRect),
-    );
-    // Kenarlar hafif koyu (vinyet)
-    canvas.drawRect(
-      cimRect,
-      Paint()
-        ..shader = RadialGradient(
-          radius: 1.05,
-          colors: <Color>[Colors.transparent, Colors.black.withOpacity(0.22)],
-          stops: const <double>[0.72, 1.0],
-        ).createShader(cimRect),
-    );
-    // Ince nokta cim dokusu (deterministik)
-    final Paint nokta = Paint()..color = Colors.white.withOpacity(0.035);
-    final Paint nokta2 = Paint()..color = Colors.black.withOpacity(0.045);
-    for (int i = 0; i < 380; i++) {
-      final double nx = ((i * 137) % 997) / 997;
-      final double ny = ((i * 389) % 991) / 991;
-      canvas.drawCircle(Offset(sahaSolX + nx * (sahaSagX - sahaSolX), sahaUstY + ny * (sahaAltY - sahaUstY)), 0.8, i.isEven ? nokta : nokta2);
-    }
-    canvas.restore();
-    // Saha kenarlarında koyu çerçeve
-    canvas.drawRect(
-      Rect.fromLTRB(sahaSolX - 5, sahaUstY - 5, sahaSagX + 5, sahaAltY + 5),
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 5
-        ..color = const Color(0xFF0F3D17),
-    );
-
-    // --- Beyaz saha çizgileri ---
-    final Paint cizgi = Paint()
+    // --- Beyaz saha cizgileri ---
+    final Paint ciz = Paint()
       ..color = Colors.white.withOpacity(0.9)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2.0;
-    cizgiCiz(canvas, size, 0, 0, 1, 0, cizgi);
-    cizgiCiz(canvas, size, 0, 1, 1, 1, cizgi);
-    cizgiCiz(canvas, size, 0, 0, 0, 1, cizgi);
-    cizgiCiz(canvas, size, 1, 0, 1, 1, cizgi);
-    // Orta çizgi + orta yuvarlak
-    cizgiCiz(canvas, size, 0, 0.5, 1, 0.5, cizgi);
-    final Paint cizgiGolge = Paint()
-      ..color = Colors.black.withOpacity(0.20)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.0;
-    canvas.drawOval(sahaRect(size, 0.35, 0.425, 0.65, 0.575).shift(const Offset(0, 1)), cizgiGolge);
-    canvas.drawOval(sahaRect(size, 0.35, 0.425, 0.65, 0.575), cizgi);
-    canvas.drawCircle(proje(const Offset(0.5, 0.5), size), 2.5, Paint()..color = Colors.white);
-    // Ceza sahaları + kale alanları
-    for (final Rect rr in <Rect>[
-      sahaRect(size, 0.22, 0, 0.78, 0.15),
-      sahaRect(size, 0.22, 0.85, 0.78, 1),
-      sahaRect(size, 0.36, 0, 0.64, 0.055),
-      sahaRect(size, 0.36, 0.945, 0.64, 1),
+    final Path dis = sahaYolu(size, 0, 0, 1, 1);
+    canvas.drawPath(dis, ciz);
+    cizgi(canvas, size, 0, 0.5, 1, 0.5, ciz);
+    // Orta yuvarlak (perspektif elips)
+    final Offset oc = SahaPainter.proje(const Offset(0.5, 0.5), size);
+    final double g5 = SahaPainter.genOran(0.5);
+    canvas.drawOval(
+      Rect.fromCenter(center: oc, width: 0.30 * SahaPainter.sahaGen * g5 * w, height: 0.15 * (SahaPainter.alt - SahaPainter.ust) * h),
+      ciz,
+    );
+    canvas.drawCircle(oc, 2.5, Paint()..color = Colors.white);
+    // Ceza sahalari + kale alanlari
+    for (final List<double> rr in <List<double>>[
+      <double>[0.22, 0, 0.78, 0.15],
+      <double>[0.22, 0.85, 0.78, 1],
+      <double>[0.36, 0, 0.64, 0.055],
+      <double>[0.36, 0.945, 0.64, 1],
     ]) {
-      canvas.drawRect(rr.shift(const Offset(0, 1)), cizgiGolge);
-      canvas.drawRect(rr, cizgi);
+      canvas.drawPath(sahaYolu(size, rr[0], rr[1], rr[2], rr[3]), ciz);
     }
 
-    // --- Kaleler (ağ dokusu görünür) ---
-    kaleCiz(canvas, size, true);
-    kaleCiz(canvas, size, false);
+    // --- Kale direkleri (ag dokusu dinamik katmanda) ---
+    final Paint direk = Paint()
+      ..color = Colors.white
+      ..strokeWidth = 3.5
+      ..strokeCap = StrokeCap.round;
+    for (final bool ust in <bool>[true, false]) {
+      final double sy = ust ? 0.0 : 1.0;
+      final Offset sd = SahaPainter.proje(Offset(0.38, sy), size);
+      final Offset sg = SahaPainter.proje(Offset(0.62, sy), size);
+      canvas.drawCircle(sd, 3, Paint()..color = Colors.white);
+      canvas.drawCircle(sg, 3, Paint()..color = Colors.white);
+      canvas.drawLine(sd, sg, direk);
+    }
+  }
 
-    // --- Nişan oku (interaktif modda) ---
-    if (interaktif && nisan != null) {
-      final Offset a = proje(benimPos[0], size);
-      final Offset b = proje(nisan!, size);
+  @override
+  bool shouldRepaint(covariant ZeminPainter oldDelegate) => true;
+}
+
+// ---------- VIGNETTE: ayri RepaintBoundary katmani ----------
+class VinyetPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Rect r = Rect.fromLTWH(0, 0, size.width, size.height);
+    canvas.drawRect(
+      r,
+      Paint()
+        ..shader = RadialGradient(
+          radius: 1.15,
+          colors: <Color>[Colors.transparent, Colors.black.withOpacity(0.30)],
+          stops: const <double>[0.68, 1.0],
+        ).createShader(r),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant VinyetPainter oldDelegate) => false;
+}
+
+// ---------- DINAMIK KATMAN: oyuncular + top + parcaciklar ----------
+class SahaPainter extends CustomPainter {
+  final _MacEkraniState s;
+  SahaPainter(this.s);
+
+  // hata #11: static YOK — kosma fazlari painter instance alaninda
+  final Map<String, Offset> _sonPos = <String, Offset>{};
+  final Map<String, double> _kosFaz = <String, double>{};
+  // TextPainter cache (isim/forma no tekrar layout edilmez)
+  final Map<String, TextPainter> _tpCache = <String, TextPainter>{};
+
+  // --- Yamuk perspektif projeksiyon (yan TV kamerasi) ---
+  // Saha ekranin orta ~%55'inde; alt kenar 1.0x, ust kenar 0.78x genislik.
+  static const double ust = 0.20; // h orani (ustte tribun + pano)
+  static const double alt = 0.78; // h orani
+  static const double ortaX = 0.5;
+  static const double ustGen = 0.78; // ust kenar genislik carpani
+  static const double sahaGen = 0.96; // taban genisligi (w orani)
+
+  static double genOran(double d) => ustGen + (1 - ustGen) * d;
+  static double derinlikOlcek(double d) => 0.62 + 0.38 * d;
+
+  // Saha koordinatini (0..1) ekrana donusturur
+  static Offset proje(Offset saha, Size size) {
+    final double d = saha.dy;
+    final double g = genOran(d);
+    return Offset(
+      size.width * (ortaX + (saha.dx - 0.5) * sahaGen * g),
+      size.height * (ust + d * (alt - ust)),
+    );
+  }
+
+  // Ekran noktasini saha koordinatina cevirir (nisan icin)
+  static Offset tersProje(Offset p, Size size) {
+    final double d = ((p.dy / size.height - ust) / (alt - ust)).clamp(0.0, 1.0);
+    final double g = genOran(d);
+    final double x = (0.5 + (p.dx / size.width - ortaX) / (sahaGen * g)).clamp(0.0, 1.0);
+    return Offset(x, d);
+  }
+
+  TextPainter tp(String metin, double boyut, Color renk, {bool kalin = false, bool kontur = false}) {
+    final String anahtar = '$metin|$boyut|${renk.value}|$kalin|$kontur';
+    return _tpCache.putIfAbsent(
+      anahtar,
+      () => TextPainter(
+        text: TextSpan(
+          text: metin,
+          style: TextStyle(
+            color: kontur ? null : renk,
+            fontSize: boyut,
+            fontWeight: kalin ? FontWeight.bold : FontWeight.normal,
+            shadows: kontur ? null : const <Shadow>[Shadow(blurRadius: 2, color: Colors.black)],
+            foreground: kontur
+                ? (Paint()
+                  ..style = PaintingStyle.stroke
+                  ..strokeWidth = 2
+                  ..color = renk)
+                : null,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout(),
+    );
+  }
+
+  void yazi(Canvas canvas, String metin, Offset merkez, double boyut, Color renk, {bool kalin = false}) {
+    final TextPainter t = tp(metin, boyut, renk, kalin: kalin);
+    t.paint(canvas, merkez - Offset(t.width / 2, t.height / 2));
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // --- Kale aglari (6x4 grid, golde top yonunde 8-14px esner + elastik sonum) ---
+    kaleAgi(canvas, size, true);
+    kaleAgi(canvas, size, false);
+
+    // --- Nisan oku (interaktif modda) ---
+    if (s.interaktif && s.nisan != null) {
+      final Offset a = proje(s.benimPos[0], size);
+      final Offset b = proje(s.nisan!, size);
       final Paint ok = Paint()
         ..color = Colors.yellow
         ..strokeWidth = 4
@@ -5542,279 +5996,357 @@ class SahaPainter extends CustomPainter {
         canvas.drawLine(b, Offset(b.dx - u.dx * 14 - u.dy * 7, b.dy - u.dy * 14 + u.dx * 7), ok);
         canvas.drawLine(b, Offset(b.dx - u.dx * 14 + u.dy * 7, b.dy - u.dy * 14 - u.dx * 7), ok);
       }
-      if (hedefTip == 'sut') {
-        final Offset k = proje(Offset(hedefKose == 'sol' ? 0.42 : 0.58, 0.0), size);
+      if (s.hedefTip == 'sut') {
+        final Offset k = proje(Offset(s.hedefKose == 'sol' ? 0.42 : 0.58, 0.0), size);
         canvas.drawCircle(k, 14, Paint()..color = Colors.yellow.withOpacity(0.45));
-        canvas.drawCircle(k, 14, Paint()
-          ..color = Colors.yellow
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 3);
+        canvas.drawCircle(
+            k,
+            14,
+            Paint()
+              ..color = Colors.yellow
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 3);
       }
     }
 
-    // --- Oyuncular (üstten görünüm: uzak olanlar önce çizilir) ---
-    final List<int> rakipSirali = List<int>.generate(11, (int i) => i)..sort((int a, int b) => rakipPos[a].dy.compareTo(rakipPos[b].dy));
-    final List<int> benimSirali = List<int>.generate(11, (int i) => i)..sort((int a, int b) => benimPos[a].dy.compareTo(benimPos[b].dy));
-    for (final int i in rakipSirali) {
-      final bool topOnda = !topUcuyor && topTakim == 1 && topOyuncu == i;
-      oyuncuCiz(canvas, size, rakipPos[i], rakipRenk, rakipRenk2, i + 1, rakipIsimler[i], false, false, i,
-          kaleci: i == 10, topOnda: topOnda, dalisTakim: dalisTakim, dalisT: dalisT, dalisYon: dalisYon, takim: 1);
+    // --- Golgeler: her oyuncu altinda derinlikle kuculen yassi elips, TEK path ---
+    final Path golgeler = Path();
+    for (int t = 0; t < 2; t++) {
+      final List<Offset> pos = t == 0 ? s.benimPos : s.rakipPos;
+      for (int i = 0; i < 11; i++) {
+        final Offset g = proje(pos[i], size);
+        final double ol = derinlikOlcek(pos[i].dy.clamp(0.0, 1.0));
+        final double gh = size.height * 0.11 * ol;
+        golgeler.addOval(Rect.fromCenter(center: g + Offset(0, 2), width: gh * 0.52, height: gh * 0.14));
+      }
     }
-    for (final int i in benimSirali) {
-      final int no = i == 0 ? formaNo : i + 1;
-      final bool vurgu = interaktif && hedefTip == 'pas' && hedefIndex == i;
-      final bool topOnda = !topUcuyor && topTakim == 0 && topOyuncu == i;
-      oyuncuCiz(canvas, size, benimPos[i], i == 0 ? kAltin : benimRenk, benimRenk2, no, benimIsimler[i], i == 0, vurgu, i,
-          kaleci: i == 10, topOnda: topOnda, dalisTakim: dalisTakim, dalisT: dalisT, dalisYon: dalisYon, takim: 0);
+    canvas.drawPath(golgeler, Paint()..color = Colors.black.withOpacity(0.25));
+
+    // --- Oyuncular: uzak (kucuk dy) once cizilir ---
+    final List<List<int>> sirali = <List<int>>[];
+    for (int t = 0; t < 2; t++) {
+      final List<Offset> pos = t == 0 ? s.benimPos : s.rakipPos;
+      final List<int> idx = List<int>.generate(11, (int i) => i)..sort((int a, int b) => pos[a].dy.compareTo(pos[b].dy));
+      for (final int i in idx) {
+        sirali.add(<int>[t, i]);
+      }
+    }
+    sirali.sort((List<int> a, List<int> b) {
+      final Offset pa = a[0] == 0 ? s.benimPos[a[1]] : s.rakipPos[a[1]];
+      final Offset pb = b[0] == 0 ? s.benimPos[b[1]] : s.rakipPos[b[1]];
+      return pa.dy.compareTo(pb.dy);
+    });
+    final Color rakipRenk = Color(s.widget.rakip.renk1).value == Color(s.benimTakim.renk1).value ? Colors.red.shade700 : Color(s.widget.rakip.renk1);
+    for (final List<int> ti in sirali) {
+      final int t = ti[0];
+      final int i = ti[1];
+      if (t == 1) {
+        final bool topOnda = !s.topUcuyor && s.topTakim == 1 && s.topOyuncu == i;
+        oyuncuCiz(canvas, size, s.rakipPos[i], rakipRenk, Color(s.widget.rakip.renk2), i + 1, s.rakipIsimler[i], false, false, i, kaleci: i == 10, topOnda: topOnda, takim: 1);
+      } else {
+        final int no = i == 0 ? kInt(s.widget.kariyer, 'formaNo', 99) : i + 1;
+        final bool vurgu = s.interaktif && s.hedefTip == 'pas' && s.hedefIndex == i;
+        final bool topOnda = !s.topUcuyor && s.topTakim == 0 && s.topOyuncu == i;
+        oyuncuCiz(canvas, size, s.benimPos[i], i == 0 ? kAltin : Color(s.benimTakim.renk1), Color(s.benimTakim.renk2), no, s.benimIsimler[i], i == 0, vurgu, i, kaleci: i == 10, topOnda: topOnda, takim: 0);
+      }
     }
 
-    // --- Top izi (beyaz-krem trail, giderek incelen noktalar) ---
-    for (int i = 0; i < topIz.length; i++) {
-      final double t = (i + 1) / topIz.length; // eski -> yeni
-      final Offset g = proje(topIz[i], size);
-      canvas.drawCircle(g, 1.5 + 4.5 * t, Paint()..color = const Color(0xFFFFF8E1).withOpacity(0.15 + 0.55 * t));
+    // --- Top izi (trail): son 8 konum, incelen krem; guc %80+ ise #FF9F1C ---
+    final Color izRenk = s.sonGuc >= 0.8 ? const Color(0xFFFF9F1C) : const Color(0xFFFFF8E1);
+    for (int i = 0; i < s.topIz.length; i++) {
+      final double t = (i + 1) / s.topIz.length; // eski -> yeni
+      final Offset g = proje(s.topIz[i], size);
+      canvas.drawCircle(g, 1.5 + 4.5 * t, Paint()..color = izRenk.withOpacity(0.12 + 0.5 * t));
     }
 
-    // --- Top (gölge yerde, top havada büyür) ---
-    final Offset zemin = proje(top, size);
-    final double yuk = topYukseklik * 50;
+    // --- Top: beyaz + 3 siyah dikis yayi (spin ile doner); golge z*40 ote, top z*60 yukari ---
+    final Offset zemin = proje(s.top, size);
+    final double z = s.topYukseklik;
     canvas.drawOval(
-      Rect.fromCenter(center: zemin + const Offset(0, 2), width: 14 - topYukseklik * 5, height: 5 - topYukseklik * 2),
-      Paint()..color = Colors.black.withOpacity(0.38 - topYukseklik * 0.18),
+      Rect.fromCenter(center: zemin + Offset(z * 40 * 0.25, 2 + z * 8), width: 14 - z * 5, height: 5 - z * 2),
+      Paint()..color = Colors.black.withOpacity((0.38 - z * 0.18).clamp(0.05, 0.38)),
     );
-    final Offset tp = zemin - Offset(0, yuk);
-    final double tr = 6.5 + topYukseklik * 4.0;
-    canvas.drawCircle(tp, tr, Paint()..color = Colors.white);
-    canvas.drawCircle(tp, tr, Paint()
-      ..color = Colors.black54
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.4);
-    canvas.drawCircle(tp + Offset(-tr * 0.25, -tr * 0.25), tr * 0.22, Paint()..color = Colors.black87);
-    canvas.drawCircle(tp + Offset(tr * 0.3, tr * 0.25), tr * 0.16, Paint()..color = Colors.black87);
-
-    // --- Gol anı: top ağda titrer (0.4 sn) ---
-    for (final bool ustKale in <bool>[true, false]) {
-      final double ag = ustKale ? agUst : agAlt;
-      if (ag > 0) {
-        final Offset merkez = proje(Offset(0.5, ustKale ? 0.0 : 1.0), size);
-        final Offset titresim = Offset(sin(ag * 55) * 3, cos(ag * 47) * 2);
-        final Offset gm = merkez + Offset(0, ustKale ? -8 : 8) + titresim;
-        canvas.drawCircle(gm, 7, Paint()..color = Colors.white);
-        canvas.drawCircle(gm, 7, Paint()
+    final Offset tpc = zemin - Offset(0, z * 60);
+    final double tr = 6.5 + z * 4.0;
+    canvas.drawCircle(tpc, tr, Paint()..color = Colors.white);
+    canvas.drawCircle(
+        tpc,
+        tr,
+        Paint()
           ..color = Colors.black54
           ..style = PaintingStyle.stroke
           ..strokeWidth = 1.4);
-        canvas.drawCircle(gm + const Offset(-1.8, -1.8), 1.6, Paint()..color = Colors.black87);
-        // Ağ parlaması
-        canvas.drawRect(
-          Rect.fromCenter(center: merkez + Offset(0, ustKale ? -9 : 9), width: (sahaSagX - sahaSolX) * 0.24, height: 18),
-          Paint()..color = Colors.white.withOpacity(0.12 + ag * 0.3),
-        );
+    // 3 dikis yayi spin ile doner
+    final Paint dikis = Paint()
+      ..color = Colors.black87
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.3;
+    for (int k = 0; k < 3; k++) {
+      final double aci = s.topSpin + k * 2 * pi / 3;
+      canvas.drawArc(Rect.fromCircle(center: tpc, radius: tr * 0.55), aci, 1.2, false, dikis);
+    }
+
+    // --- Gol ani: top agda (esneyen agin icinde) ---
+    for (final bool ustKale in <bool>[true, false]) {
+      final double ag = ustKale ? s.agUst : s.agAlt;
+      if (ag > 0) {
+        final Offset merkez = proje(Offset(0.5, ustKale ? 0.0 : 1.0), size);
+        final Offset titresim = Offset(sin(ag * 40) * 3 * ag, cos(ag * 33) * 2 * ag);
+        final Offset gm = merkez + Offset(0, ustKale ? -8 : 8) + titresim;
+        canvas.drawCircle(gm, 7, Paint()..color = Colors.white);
+        canvas.drawCircle(
+            gm,
+            7,
+            Paint()
+              ..color = Colors.black54
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 1.4);
       }
     }
 
-    // --- Yıldız konfeti patlaması ---
-    for (final Konfeti k in konfeti) {
+    // --- Donen konfeti (24 adet, ~1.8 sn) ---
+    for (final Konfeti k in s.konfeti) {
       canvas.save();
       canvas.translate(k.p.dx, k.p.dy);
-      canvas.rotate(k.p.dx * 0.05 + k.omur * 3);
-      final Paint kp = Paint()..color = k.c.withOpacity(k.omur.clamp(0.0, 1.0));
-      // küçük yıldız
-      final Path yildiz = Path();
-      for (int i = 0; i < 10; i++) {
-        final double rr = i.isEven ? k.boyut : k.boyut * 0.45;
-        final double aa = -pi / 2 + i * pi / 5;
-        final Offset n = Offset(cos(aa) * rr, sin(aa) * rr);
-        if (i == 0) {
-          yildiz.moveTo(n.dx, n.dy);
-        } else {
-          yildiz.lineTo(n.dx, n.dy);
-        }
-      }
-      yildiz.close();
-      canvas.drawPath(yildiz, kp);
+      canvas.rotate(k.omur * 6 + k.p.dx * 0.05);
+      canvas.drawRect(
+        Rect.fromCenter(center: Offset.zero, width: k.boyut, height: k.boyut * 0.6),
+        Paint()..color = k.c.withOpacity((k.omur / 1.2).clamp(0.0, 1.0)),
+      );
       canvas.restore();
+    }
+    // --- Toz parcaciklari (kaleci dusus) ---
+    for (final Toz t in s.toz) {
+      canvas.drawCircle(t.p, 3.5 * t.omur + 1, Paint()..color = const Color(0xFFB0A88F).withOpacity((t.omur * 1.6).clamp(0.0, 0.7)));
     }
   }
 
-  // Üstten görünümde kale: 3D kutu hissi, arkaya daralan ağ, gol anında ağ esner
-  void kaleCiz(Canvas canvas, Size size, bool ustKale) {
+  // Kale agi: 6x4 grid; golde top yonunde 8-14 px esner, elastik sonumle geri gelir
+  void kaleAgi(Canvas canvas, Size size, bool ustKale) {
     final double sy = ustKale ? 0.0 : 1.0;
     final double yon = ustKale ? -1.0 : 1.0;
     final Offset solDirek = proje(Offset(0.38, sy), size);
     final Offset sagDirek = proje(Offset(0.62, sy), size);
-    // Gol aninda ag iceri esner (deformasyon)
-    final double agT = ustKale ? agUst : agAlt;
-    final double esneme = agT > 0 ? sin((0.4 - agT) / 0.4 * pi) : 0.0;
-    final double derinlik = 16 + esneme * 12; // ağ derinliği (px)
-    final double merkezX = (solDirek.dx + sagDirek.dx) / 2;
-    final Paint direk = Paint()
-      ..color = Colors.white
-      ..strokeWidth = 4
-      ..strokeCap = StrokeCap.round;
-    // Ağ kutusu: arkaya dogru daralan yamuk (3D his)
-    final double daralma = 0.16; // arka kenar %16 dar
-    final Offset arkaSol = Offset(solDirek.dx + (merkezX - solDirek.dx) * daralma, solDirek.dy + yon * derinlik);
-    final Offset arkaSag = Offset(sagDirek.dx - (sagDirek.dx - merkezX) * daralma, sagDirek.dy + yon * derinlik);
+    final double ag = ustKale ? s.agUst : s.agAlt;
+    // Elastik sonum: genlik azalarak salinir (8-14 px), topun x yonune dogru
+    double esX = 0;
+    double esY = 0;
+    if (ag > 0) {
+      final double k = 1 - ag; // 0 -> 1 (gol anindan itibaren)
+      final double genlik = (10 + 4 * sin(s.top.dx * 20)) * ag; // sonumlu
+      esX = sin(k * 12) * genlik * (s.top.dx < 0.5 ? -1 : 1);
+      esY = sin(k * 12) * genlik * yon;
+    }
+    const double derinlik = 14;
+    final Offset arkaSol = solDirek + Offset((sagDirek.dx - solDirek.dx) * 0.14 + esX, yon * derinlik + esY);
+    final Offset arkaSag = sagDirek + Offset((solDirek.dx - sagDirek.dx) * 0.14 + esX, yon * derinlik + esY);
     final Path kutu = Path()
       ..moveTo(solDirek.dx, solDirek.dy)
       ..lineTo(sagDirek.dx, sagDirek.dy)
       ..lineTo(arkaSag.dx, arkaSag.dy)
       ..lineTo(arkaSol.dx, arkaSol.dy)
       ..close();
-    canvas.drawPath(kutu, Paint()..color = Colors.white.withOpacity(0.14 + esneme * 0.15));
-    // Ağ örgüsü: dikey ipler (arkaya kavisli/esneyen) + yatay ipler
-    final Paint ag = Paint()
+    canvas.drawPath(kutu, Paint()..color = Colors.white.withOpacity(0.13 + (ag > 0 ? ag * 0.15 : 0)));
+    final Paint ip = Paint()
       ..color = Colors.white.withOpacity(0.55)
       ..strokeWidth = 1;
-    for (int i = 1; i < 8; i++) {
-      final double tt = i / 8;
-      final double x0 = solDirek.dx + (sagDirek.dx - solDirek.dx) * tt;
-      final double x1 = arkaSol.dx + (arkaSag.dx - arkaSol.dx) * tt;
-      // gol aninda orta ipler daha cok esner (bombeli)
-      final double bombe = 1 + esneme * 0.5 * sin(pi * tt);
-      final Offset bitis = Offset(x1, solDirek.dy + yon * derinlik * bombe);
-      canvas.drawLine(Offset(x0, solDirek.dy), bitis, ag);
+    // 6 dikey ip
+    for (int i = 1; i < 6; i++) {
+      final double tt = i / 6;
+      final Offset a = Offset(solDirek.dx + (sagDirek.dx - solDirek.dx) * tt, solDirek.dy);
+      final Offset b = Offset(arkaSol.dx + (arkaSag.dx - arkaSol.dx) * tt, arkaSol.dy);
+      canvas.drawLine(a, b, ip);
     }
-    for (int i = 1; i < 3; i++) {
-      final double tt = i / 3;
-      final double yy = solDirek.dy + yon * derinlik * tt * (1 + esneme * 0.3);
-      final double xl = solDirek.dx + (arkaSol.dx - solDirek.dx) * tt;
-      final double xr = sagDirek.dx + (arkaSag.dx - sagDirek.dx) * tt;
-      canvas.drawLine(Offset(xl, yy), Offset(xr, yy), ag);
+    // 4 yatay ip
+    for (int i = 1; i < 4; i++) {
+      final double tt = i / 4;
+      final Offset a = Offset(solDirek.dx + (arkaSol.dx - solDirek.dx) * tt, solDirek.dy + (arkaSol.dy - solDirek.dy) * tt);
+      final Offset b = Offset(sagDirek.dx + (arkaSag.dx - sagDirek.dx) * tt, sagDirek.dy + (arkaSag.dy - sagDirek.dy) * tt);
+      canvas.drawLine(a, b, ip);
     }
-    // Direkler (gol çizgisinde iki nokta + arka çizgi)
-    canvas.drawCircle(solDirek, 3, Paint()..color = Colors.white);
-    canvas.drawCircle(sagDirek, 3, Paint()..color = Colors.white);
-    canvas.drawLine(solDirek, arkaSol, direk);
-    canvas.drawLine(sagDirek, arkaSag, direk);
-    canvas.drawLine(arkaSol, arkaSag, Paint()
-      ..color = Colors.white.withOpacity(0.8)
-      ..strokeWidth = 2);
+    // arka ust kenar
+    canvas.drawLine(
+        arkaSol,
+        arkaSag,
+        Paint()
+          ..color = Colors.white.withOpacity(0.8)
+          ..strokeWidth = 2);
   }
 
-  // Üstten detaylı mini figür: yumuşak gölge + corap + sort + forma + ten kafa + sac + no
-  // Kosuyorsa bacak/govde sallanir (hareket hizina bagli), durunca durur.
+  // Tam vucut mini adam: kafa (ten #F1C27D + sac), forma govde RRect, 2 kol, 2 bacak,
+  // siyah konturlu forma no. Kosma: bacak uclari sin faz farkli, kollar ters faz,
+  // govde 6° one egik; gercek harekete bagli (durunca durur).
   void oyuncuCiz(Canvas canvas, Size size, Offset p, Color govde, Color detay, int no, String isim, bool ben, bool vurgu, int idx,
-      {bool kaleci = false, bool topOnda = false, int dalisTakim = -1, double dalisT = 0, double dalisYon = 1, int takim = 0}) {
+      {bool kaleci = false, bool topOnda = false, int takim = 0}) {
     final String anahtar = '$takim-$idx';
     final Offset g0 = proje(p, size);
-    // Hareket hizi -> kosma fazi (durunca bacaklar durur)
+    final double d = p.dy.clamp(0.0, 1.0);
+    final double ol = derinlikOlcek(d) * (topOnda ? 1.08 : 1.0);
+    final double boyH = size.height * 0.11 * ol; // yakin oyuncu ~%11 ekran yuksekligi
+
+    // Hareket hizi -> kosma fazi (instance alani; durunca bacaklar durur)
     final Offset once = _sonPos[anahtar] ?? g0;
     final double hareket = (g0 - once).distance;
     _sonPos[anahtar] = g0;
-    final double kosK = (hareket / 1.2).clamp(0.0, 1.0); // 0 durur, 1 tam kos
+    final double kosK = (hareket / 1.1).clamp(0.0, 1.0);
     final double faz = (_kosFaz[anahtar] ?? idx * 1.7) + kosK * 0.9;
     _kosFaz[anahtar] = faz;
 
-    // Kaleci renkleri: fistik yesili (bizim) / turuncu (rakip)
     final Color forma = kaleci ? (takim == 0 ? const Color(0xFF8BC34A) : const Color(0xFFFF9800)) : govde;
-    final Color sort = kaleci ? Colors.black : detay;
-    final Color corap = kaleci ? Colors.black : govde;
+    const Color ten = Color(0xFFF1C27D);
+    const Color sac = Color(0xFF3E2723);
 
-    // Kaleci kurtaris dalisi: 0.8 sn (dal -> yerde kal -> kalk)
-    double dalisK = 0; // 0 yok, 1 tam uzanmis
-    if (kaleci && dalisTakim == takim && dalisT > 0) {
-      final double gecen = 0.8 - dalisT;
+    // Kaleci dalisi: figur yataylasir (±1.2 rad), parabolik ucar
+    double dalisK = 0;
+    if (kaleci && s.dalisTakim == takim && s.dalisT > 0) {
+      final double gecen = 0.8 - s.dalisT;
       if (gecen < 0.2) {
         dalisK = Curves.easeOut.transform(gecen / 0.2);
       } else if (gecen < 0.5) {
-        dalisK = 1; // yerde kalir
+        dalisK = 1;
       } else {
-        dalisK = 1 - (gecen - 0.5) / 0.3; // kalkar
+        dalisK = 1 - (gecen - 0.5) / 0.3;
       }
     }
 
-    // Topa sahip oyuncu hafif buyuk vurgu
-    final double olcek = topOnda ? 1.15 : 1.0;
-    // Kosma govde sallanmasi
-    final Offset g = g0 + Offset(sin(faz) * 1.8 * kosK, cos(faz * 0.9) * 1.2 * kosK) + Offset(dalisYon * dalisK * 16, 0);
+    // Sevinc: 1.2 sn kollar V + ziplama
+    double sevK = 0;
+    if (anahtar == s.sevincAnahtar && s.sevincT > 0) {
+      sevK = 1 - s.sevincT / 1.2; // 0 -> 1
+    }
+    // Sut savurma: 300 ms bacak geri-ileri
+    double sutK = -1;
+    if (anahtar == s.sutAnahtar && s.sutT > 0) {
+      sutK = (0.3 - s.sutT) / 0.3; // 0 -> 1
+    }
 
-    // Yumuşak gölge elipsi
-    canvas.drawOval(
-      Rect.fromCenter(center: g + Offset(0, 4 * olcek), width: 24 * olcek + dalisK * 14, height: 8 * olcek),
-      Paint()..color = Colors.black.withOpacity(0.28),
-      // soft edge icin ikinci katman
-    );
-    canvas.drawOval(
-      Rect.fromCenter(center: g + Offset(0, 4 * olcek), width: 17 * olcek + dalisK * 10, height: 6 * olcek),
-      Paint()..color = Colors.black.withOpacity(0.22),
-    );
+    final double zipla = sevK > 0 ? -sin(sevK * pi) * boyH * 0.30 : 0;
+    Offset g = g0 + Offset(0, zipla);
+    if (dalisK > 0) {
+      g += Offset(s.dalisYon * dalisK * boyH * 0.55, -sin(dalisK * pi) * boyH * 0.35);
+    }
 
+    // Vurgu halkasi (pas hedefi)
     if (vurgu) {
-      canvas.drawCircle(g, 16, Paint()..color = Colors.yellow.withOpacity(0.40));
-      canvas.drawCircle(g, 16, Paint()
-        ..color = Colors.yellow
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 3);
+      canvas.drawCircle(g - Offset(0, boyH * 0.5), boyH * 0.42, Paint()..color = Colors.yellow.withOpacity(0.35));
+      canvas.drawCircle(
+          g - Offset(0, boyH * 0.5),
+          boyH * 0.42,
+          Paint()
+            ..color = Colors.yellow
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2.5);
+    }
+    // FORMDAYIM glow (kullanicinin oyuncusu, combo >= 3)
+    if (ben && s.combo >= 3) {
+      canvas.drawCircle(g - Offset(0, boyH * 0.5), boyH * 0.55, Paint()..color = const Color(0xFFFF7043).withOpacity(0.22));
     }
     if (ben || topOnda) {
-      canvas.drawCircle(g, 13.5 * olcek, Paint()..color = (ben ? kAltin : Colors.white).withOpacity(0.30));
+      canvas.drawCircle(g - Offset(0, boyH * 0.5), boyH * 0.46, Paint()..color = (ben ? kAltin : Colors.white).withOpacity(0.16));
     }
 
-    if (dalisK > 0.05) {
-      // Dalis: yatay uzanmis figür (govde elips + kol)
-      canvas.save();
-      canvas.translate(g.dx, g.dy);
-      canvas.rotate(dalisYon * dalisK * 0.35);
-      canvas.drawOval(Rect.fromCenter(center: Offset.zero, width: 24 * dalisK + 10, height: 10), Paint()..color = forma);
-      // uzanan kol + eldiven
-      canvas.drawLine(Offset(dalisYon * 8, -3), Offset(dalisYon * (12 + 8 * dalisK), -6), Paint()
-        ..color = forma
-        ..strokeWidth = 4
-        ..strokeCap = StrokeCap.round);
-      canvas.drawCircle(Offset(dalisYon * (13 + 8 * dalisK), -6), 3, Paint()..color = Colors.white);
-      // kafa
-      canvas.drawCircle(Offset(-dalisYon * 4, 0), 4.2, Paint()..color = const Color(0xFFFFCC9E));
-      canvas.restore();
-      yazi(canvas, isim, g + const Offset(0, 20), 8, Colors.white);
-      return;
+    // Sut after-image: 3 hayalet siluet (alfa 0.25 / 0.15 / 0.08)
+    if (sutK >= 0) {
+      const List<double> alfalar = <double>[0.25, 0.15, 0.08];
+      for (int k = 0; k < 3; k++) {
+        final Offset gp = g + Offset(0, 0) + Offset(-(k + 1) * boyH * 0.10, (k + 1) * 1.5);
+        final Paint hay = Paint()..color = forma.withOpacity(alfalar[k]);
+        canvas.drawCircle(gp - Offset(0, boyH * 0.52), boyH * 0.16, hay);
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(Rect.fromCenter(center: gp - Offset(0, boyH * 0.32), width: boyH * 0.30, height: boyH * 0.30), Radius.circular(boyH * 0.05)),
+          hay,
+        );
+      }
     }
 
-    final double r = 8.5 * olcek;
-    // Coraplar (bacaklar): kosarken sallanir
-    final double bacakSal = sin(faz) * 3.0 * kosK;
-    canvas.drawOval(Rect.fromCenter(center: g + Offset(-3, 5.5 + bacakSal), width: 4.5, height: 6), Paint()..color = corap);
-    canvas.drawOval(Rect.fromCenter(center: g + Offset(3, 5.5 - bacakSal), width: 4.5, height: 6), Paint()..color = corap);
-    // Şort (farkli renk)
+    canvas.save();
+    canvas.translate(g.dx, g.dy);
+    if (dalisK > 0) {
+      canvas.rotate(s.dalisYon * dalisK * 1.2); // yatay dalis
+    } else if (sevK == 0) {
+      // Kosmada govde 6° one egik (hucum yonu: biz yukari, rakip asagi)
+      final double yon = takim == 0 ? -1.0 : 1.0;
+      canvas.rotate(0.105 * kosK * yon);
+    }
+
+    final double bacak = boyH * 0.40;
+    final double govdeH = boyH * 0.32;
+    final double govdeW = boyH * 0.30;
+    final double kafaR = boyH * 0.13;
+
+    final Paint uzuv = Paint()
+      ..strokeWidth = boyH * 0.055
+      ..strokeCap = StrokeCap.round;
+
+    // --- 2 bacak: kosarken sin(10t) faz farkli uclar, durunca sabit ---
+    final double sal = sin(faz) * boyH * 0.16 * kosK;
+    final double kalcaY = -bacak;
+    Offset ayak1 = Offset(-govdeW * 0.22 + sal, 0);
+    Offset ayak2 = Offset(govdeW * 0.22 - sal, 0);
+    if (sutK >= 0) {
+      // Sut: sag bacak once geri, sonra ileri savrulur
+      final double sw = sin(sutK * pi) * boyH * 0.30;
+      ayak2 = Offset(govdeW * 0.22 + sw, -sw * 0.35);
+    }
+    if (sevK > 0) {
+      ayak1 = Offset(-govdeW * 0.30, 0);
+      ayak2 = Offset(govdeW * 0.30, 0);
+    }
+    uzuv.color = Colors.black87; // corap/bacak
+    canvas.drawLine(Offset(-govdeW * 0.18, kalcaY), ayak1, uzuv);
+    canvas.drawLine(Offset(govdeW * 0.18, kalcaY), ayak2, uzuv);
+
+    // --- Govde: forma RRect ---
+    final Rect govdeRect = Rect.fromCenter(center: Offset(0, kalcaY - govdeH / 2 + 2), width: govdeW, height: govdeH);
+    canvas.drawRRect(RRect.fromRectAndRadius(govdeRect, Radius.circular(govdeW * 0.22)), Paint()..color = forma);
     canvas.drawRRect(
-      RRect.fromRectAndRadius(Rect.fromCenter(center: g + const Offset(0, 3.5), width: r * 1.55, height: r * 0.75), const Radius.circular(2.5)),
-      Paint()..color = sort,
+      RRect.fromRectAndRadius(govdeRect, Radius.circular(govdeW * 0.22)),
+      Paint()
+        ..color = Colors.black26
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
     );
-    // Forma gövdesi (üstten omuz dairesi)
-    canvas.drawCircle(g, r, Paint()..color = forma);
-    canvas.drawCircle(g, r, Paint()
-      ..color = Colors.black26
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1);
-    // Omuz detayı (ikinci renk şeridi)
-    canvas.drawArc(Rect.fromCircle(center: g, radius: r), pi * 0.15, pi * 0.7, true, Paint()..color = detay.withOpacity(0.9));
-    // Kafa (ten) + saç (koyu yay)
-    canvas.drawCircle(g - Offset(0, 1.5 * olcek), 4.2 * olcek, Paint()..color = const Color(0xFFFFCC9E));
-    canvas.drawArc(Rect.fromCircle(center: g - Offset(0, 1.5 * olcek), radius: 4.2 * olcek), pi, pi, true, Paint()..color = const Color(0xFF3E2723));
-    // Forma numarası (govdenin ustunde, siyah konturlu, okunakli)
-    final TextPainter noTp = TextPainter(
-      text: TextSpan(
-        text: '$no',
-        style: TextStyle(
-          fontSize: 8.5,
-          fontWeight: FontWeight.w900,
-          foreground: Paint()
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 2
-            ..color = Colors.black,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    noTp.paint(canvas, g + Offset(0, 4.5) - Offset(noTp.width / 2, noTp.height / 2));
-    final TextPainter noTp2 = TextPainter(
-      text: TextSpan(text: '$no', style: const TextStyle(fontSize: 8.5, fontWeight: FontWeight.w900, color: Colors.white)),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    noTp2.paint(canvas, g + Offset(0, 4.5) - Offset(noTp2.width / 2, noTp2.height / 2));
-    // İsim
-    yazi(canvas, isim, g + const Offset(0, 20), 8, Colors.white);
+    // Forma detay seridi (ikinci renk)
+    canvas.drawRect(
+      Rect.fromLTWH(govdeRect.left, govdeRect.center.dy - 1.5, govdeRect.width, 3),
+      Paint()..color = detay.withOpacity(0.9),
+    );
+
+    // --- 2 kol: kosarken bacaklarla TERS faz; sevincte V seklinde yukari ---
+    final double omuzY = kalcaY - govdeH * 0.78;
+    final double kolBoy = govdeH * 0.85;
+    uzuv.color = forma;
+    if (sevK > 0) {
+      // V: iki kol yukari acilir
+      canvas.drawLine(Offset(-govdeW * 0.5, omuzY), Offset(-govdeW * 0.5 - kolBoy * 0.45, omuzY - kolBoy * 0.85), uzuv);
+      canvas.drawLine(Offset(govdeW * 0.5, omuzY), Offset(govdeW * 0.5 + kolBoy * 0.45, omuzY - kolBoy * 0.85), uzuv);
+      canvas.drawCircle(Offset(-govdeW * 0.5 - kolBoy * 0.45, omuzY - kolBoy * 0.85), boyH * 0.035, Paint()..color = ten);
+      canvas.drawCircle(Offset(govdeW * 0.5 + kolBoy * 0.45, omuzY - kolBoy * 0.85), boyH * 0.035, Paint()..color = ten);
+    } else {
+      final double kolSal = sin(faz) * boyH * 0.13 * kosK; // bacaklarla ters faz (isaret ters)
+      canvas.drawLine(Offset(-govdeW * 0.5, omuzY), Offset(-govdeW * 0.5 - kolSal, omuzY + kolBoy), uzuv);
+      canvas.drawLine(Offset(govdeW * 0.5, omuzY), Offset(govdeW * 0.5 + kolSal, omuzY + kolBoy), uzuv);
+      canvas.drawCircle(Offset(-govdeW * 0.5 - kolSal, omuzY + kolBoy), boyH * 0.035, Paint()..color = ten);
+      canvas.drawCircle(Offset(govdeW * 0.5 + kolSal, omuzY + kolBoy), boyH * 0.035, Paint()..color = ten);
+    }
+
+    // --- Kafa: ten + sac ---
+    final Offset kafa = Offset(0, omuzY - kafaR * 0.9);
+    canvas.drawCircle(kafa, kafaR, Paint()..color = ten);
+    canvas.drawArc(Rect.fromCircle(center: kafa, radius: kafaR), pi, pi, true, Paint()..color = sac);
+
+    // --- Forma numarasi: siyah konturlu, govdenin ortasinda ---
+    final TextPainter noKontur = tp('$no', boyH * 0.16, Colors.black, kalin: true, kontur: true);
+    noKontur.paint(canvas, Offset(0, kalcaY - govdeH / 2 + 2) - Offset(noKontur.width / 2, noKontur.height / 2));
+    final TextPainter noDolgu = tp('$no', boyH * 0.16, Colors.white, kalin: true);
+    noDolgu.paint(canvas, Offset(0, kalcaY - govdeH / 2 + 2) - Offset(noDolgu.width / 2, noDolgu.height / 2));
+
+    canvas.restore();
+
+    // Isim etiketi (sadece onemli oyuncularda: performans)
+    if (ben || topOnda || vurgu) {
+      yazi(canvas, isim, g + Offset(0, boyH * 0.14), 8, Colors.white);
+    }
   }
 
   @override

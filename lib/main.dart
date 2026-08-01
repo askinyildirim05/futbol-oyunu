@@ -5741,9 +5741,9 @@ class ZeminPainter extends CustomPainter {
     // Ceza sahalari + kale sahalari + korner yaylari
     for (final bool sol in <bool>[true, false]) {
       final double xs = sol ? 0.0 : 1.0;
-      final double is = sol ? 1.0 : -1.0;
+      final double isr = sol ? 1.0 : -1.0;
       final List<Offset> ceza = <Offset>[
-        Offset(xs, 0.22), Offset(xs + is * 0.16, 0.22), Offset(xs + is * 0.16, 0.78), Offset(xs, 0.78),
+        Offset(xs, 0.22), Offset(xs + isr * 0.16, 0.22), Offset(xs + isr * 0.16, 0.78), Offset(xs, 0.78),
       ];
       final Path p1 = Path()..moveTo(ceza[0].dx, 0);
       final List<Offset> pj = ceza.map((Offset o) => pr(o.dx, o.dy)).toList();
@@ -5755,7 +5755,7 @@ class ZeminPainter extends CustomPainter {
       cizgi.strokeWidth = 1.8;
       canvas.drawPath(p1, cizgi);
       final List<Offset> alti = <Offset>[
-        Offset(xs, 0.38), Offset(xs + is * 0.06, 0.38), Offset(xs + is * 0.06, 0.62), Offset(xs, 0.62),
+        Offset(xs, 0.38), Offset(xs + isr * 0.06, 0.38), Offset(xs + isr * 0.06, 0.62), Offset(xs, 0.62),
       ];
       final List<Offset> aj = alti.map((Offset o) => pr(o.dx, o.dy)).toList();
       final Path p2 = Path()
@@ -5766,13 +5766,13 @@ class ZeminPainter extends CustomPainter {
       cizgi.strokeWidth = 1.6;
       canvas.drawPath(p2, cizgi);
       // Penalti noktasi
-      canvas.drawCircle(pr(xs + is * 0.11, 0.5), 2.0, Paint()..color = Colors.white.withOpacity(0.85));
+      canvas.drawCircle(pr(xs + isr * 0.11, 0.5), 2.0, Paint()..color = Colors.white.withOpacity(0.85));
       // Korner yaylari
       for (final double ky in <double>[0.0, 1.0]) {
         final Path yay = Path();
         for (int i = 0; i <= 8; i++) {
           final double a = i / 8 * pi / 2;
-          final Offset o = Offset(xs + is * sin(a) * 0.015, ky + (ky == 0 ? 1 : -1) * cos(a) * 0.022);
+          final Offset o = Offset(xs + isr * sin(a) * 0.015, ky + (ky == 0 ? 1 : -1) * cos(a) * 0.022);
           final Offset p = pr(o.dx, o.dy);
           if (i == 0) {
             yay.moveTo(p.dx, p.dy);
